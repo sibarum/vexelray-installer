@@ -1,0 +1,31 @@
+{
+  "id": "myapp",
+  "name": "MyApp",
+  "publisher": "Your Name",
+  "description": "One sentence about what MyApp does.",
+  "version": "1.0.0",
+
+  "repo": "owner/myapp",
+  "branch": "main",
+  "repoPath": "",
+  "releasesRepo": "owner/myapp",
+  "tagFormat": "v{version}",
+
+  "windows": {
+    "installDir": "%LOCALAPPDATA%\\Programs\\{name}",
+    "binaries": [
+      {
+        "name": "myapp",
+        "source": "target/myapp.exe",
+        "addToPath": true,
+        "shortcuts": { "desktop": true, "startMenu": true, "label": "MyApp" }
+      },
+      {
+        "name": "myapp-tool",
+        "source": "target/myapp-tool-1.0-uber.jar",
+        "file": "myapp-tool.jar",
+        "javaMin": 21
+      }
+    ]
+  }
+}
