@@ -13,9 +13,16 @@ $fails = 0
 function Check([bool]$ok, [string]$what) {
     if ($ok) { Write-Host "  ok   $what" -ForegroundColor Green } else { Write-Host "  FAIL $what" -ForegroundColor Red; $script:fails++ }
 }
+$cli = Get-ChildItem "$repo\installer-core\target\installer-core-*-cli.jar" -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $cli) {
+    Write-Host "building the generator (mvn package)"
+    & mvn -q -f "$repo\pom.xml" -pl installer-core -DskipTests package
+    $cli = Get-ChildItem "$repo\installer-core\target\installer-core-*-cli.jar" | Select-Object -First 1
+}
 function Build([string]$ver) {
-    & "$repo\build.ps1" -Config "$root\installer.json" -Version $ver -OutDir "$root\site" -AssetsDir "$root\assets" `
-        -BaseUrl "$base/site" -AssetBaseUrl "$base/assets" -Notes "smoke $ver" | Out-Null
+    & java -jar $cli.FullName --config "$root\installer.json" --version $ver --out "$root\site" --assets "$root\assets" `
+        --base-url "$base/site" --asset-base-url "$base/assets" --notes "smoke $ver" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "generator failed" }
 }
 
 # tiny static server (separate process so it can be killed cleanly)

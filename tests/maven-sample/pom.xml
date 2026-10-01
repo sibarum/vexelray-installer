@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A project using the plugin. `mvn package` here generates target/installer/ and stages
+     target/installer-assets/<version>/. Copy the <plugin> block into a real project. -->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>sample-app</artifactId>
+    <version>1.2.0</version>
+    <name>SampleApp</name>
+    <description>
+        A sample application,
+        described over two lines.
+    </description>
+
+    <scm>
+        <url>https://github.com/example/sample-app</url>
+    </scm>
+
+    <properties>
+        <maven.compiler.release>21</maven.compiler.release>
+    </properties>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>dev.vexelray.installer</groupId>
+                <artifactId>installer-maven-plugin</artifactId>
+                <version>0.1.0-SNAPSHOT</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>generate</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <publisher>Example Inc</publisher>
+                    <windows>
+                        <binaries>
+                            <!-- the project's own jar (use a shaded/uber jar as the main artifact) -->
+                            <binary>
+                                <attached>main</attached>
+                                <file>sample.jar</file>
+                                <javaMin>21</javaMin>
+                                <shortcuts>
+                                    <label>Sample App</label>
+                                    <startMenu>true</startMenu>
+                                </shortcuts>
+                            </binary>
+                            <!-- a native-image executable built elsewhere -->
+                            <binary>
+                                <name>sample-native</name>
+                                <source>dist/sample.exe</source>
+                                <addToPath>true</addToPath>
+                            </binary>
+                        </binaries>
+                    </windows>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
