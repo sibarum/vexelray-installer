@@ -153,6 +153,28 @@ class InstallerGeneratorTest {
     }
 
     @Test
+    void anIconIsConvertedStagedAndListedInTheManifest() throws IOException {
+        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(256, 256, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        javax.imageio.ImageIO.write(img, "png", src.resolve("mark.png").toFile());
+        GenerationRequest r = new GenerationRequest();
+        r.config = config();
+        r.config.windows.binaries.get(1).icon = "src/mark.png";
+        r.version = "1.0.0";
+        r.outDir = out;
+        r.assetsDir = assets;
+        r.baseDir = tmp;
+        GenerationResult res = new InstallerGenerator().generate(r);
+
+        JsonNode jar = manifest().path("versions").get(0).path("platforms").path("windows").path("binaries").get(1);
+        assertEquals("tool.ico", jar.path("icon").path("file").asText());
+        assertEquals("{installDir}\\tool.ico", jar.path("icon").path("installPath").asText());
+        assertEquals("https://github.com/owner/myapp/releases/download/v1.0.0/tool.ico", jar.path("icon").path("url").asText());
+        assertEquals(InstallerGenerator.sha256(assets.resolve("1.0.0/tool.ico")), jar.path("icon").path("sha256").asText());
+        assertTrue(res.assets().contains(assets.resolve("1.0.0").resolve("tool.ico")));
+        assertTrue(manifest().path("versions").get(0).path("platforms").path("windows").path("binaries").get(0).path("icon").isMissingNode());
+    }
+
+    @Test
     void foreignReadmeIsNotOverwritten() throws IOException {
         Files.createDirectories(out);
         Files.writeString(out.resolve("README.md"), "# my own readme\n");

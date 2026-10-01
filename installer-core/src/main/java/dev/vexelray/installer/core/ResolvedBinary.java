@@ -12,6 +12,10 @@ public record ResolvedBinary(
         String url,
         String sha256,
         long size,
-        Path staged) {
+        Path staged,
+        ResolvedIcon icon) {
+    /** The staged, hashed {@code .ico} of a binary. */
+    public record ResolvedIcon(String file, String url, String sha256, long size, Path staged) {}
+
     public boolean isJar() { return "jar".equals(kind); }
 }

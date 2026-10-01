@@ -80,7 +80,7 @@ Defaults come from the project: `id` = artifactId, `name` = project name, `descr
 | `releasesRepo`, `tagFormat` | where binaries are downloaded from; defaults `repo` and `v{version}` |
 | `windows.installDir` | default `%LOCALAPPDATA%\Programs\{name}` |
 | `windows.registryDir` | where install manifests live; default `%LOCALAPPDATA%\vexelray-installer\installs` |
-| `windows.binaries[]` | `source` *or* `attached` (`main` or a classifier), `name`, `file`, `kind` (`native`/`jar`, inferred from the extension), `dir`, `version`, `addToPath`, `shortcuts {desktop, startMenu, label, gui}`, `javaMin` (jars) |
+| `windows.binaries[]` | `source` *or* `attached` (`main` or a classifier), `name`, `file`, `kind` (`native`/`jar`, inferred from the extension), `dir`, `version`, `addToPath`, `icon` (an `.ico`, or a square `.png` of 256px or more that is converted to one; used by the shortcuts and the Apps entry), `shortcuts {desktop, startMenu, label, gui}`, `javaMin` (jars) |
 | `outputDirectory`, `assetsDirectory` | default `target/installer` and `target/installer-assets` |
 | `notes`, `baseUrl`, `assetBaseUrl`, `skip` | release notes; URL overrides for testing; skip the goal |
 

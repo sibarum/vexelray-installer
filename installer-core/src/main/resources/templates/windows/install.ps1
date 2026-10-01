@@ -195,17 +195,29 @@ function ViInvokeInstall {
         ViStep "Downloading $appName $($entry.version)"
         $staged = @()
         foreach ($b in $bins) {
+            $ic = $null
+            if ($b.icon) {
+                $itarget = ViExpand $b.icon.installPath.Replace('{installDir}', $installDir)
+                $itemp = $null
+                if (-not ((Test-Path -LiteralPath $itarget) -and ((ViSha $itarget) -eq $b.icon.sha256))) {
+                    ViInfo "$($b.icon.file)"
+                    $itemp = Join-Path $tmp $b.icon.file
+                    Invoke-WebRequest -UseBasicParsing -Uri $b.icon.url -OutFile $itemp
+                    if ((ViSha $itemp) -ne $b.icon.sha256) { throw "Checksum mismatch for $($b.icon.file) downloaded from $($b.icon.url). Nothing was installed." }
+                }
+                $ic = [pscustomobject]@{ Target = $itarget; Temp = $itemp; Meta = $b.icon }
+            }
             $target = ViExpand $b.installPath.Replace('{installDir}', $installDir)
             if ((Test-Path -LiteralPath $target) -and ((ViSha $target) -eq $b.sha256)) {
                 ViInfo "$($b.file) is already current"
-                $staged += [pscustomobject]@{ Bin = $b; Target = $target; Temp = $null }
+                $staged += [pscustomobject]@{ Bin = $b; Target = $target; Temp = $null; Icon = $ic }
                 continue
             }
             ViInfo ("{0} ({1:N1} MB)" -f $b.file, ($b.size / 1MB))
             $dl = Join-Path $tmp $b.file
             Invoke-WebRequest -UseBasicParsing -Uri $b.url -OutFile $dl
             if ((ViSha $dl) -ne $b.sha256) { throw "Checksum mismatch for $($b.file) downloaded from $($b.url). Nothing was installed." }
-            $staged += [pscustomobject]@{ Bin = $b; Target = $target; Temp = $dl }
+            $staged += [pscustomobject]@{ Bin = $b; Target = $target; Temp = $dl; Icon = $ic }
         }
         $tools = @()
         foreach ($tn in 'uninstall.ps1', 'update.ps1') {
@@ -229,6 +241,11 @@ function ViInvokeInstall {
             }
             try { Unblock-File -LiteralPath $s.Target } catch { }
             $files += [ordered]@{ path = $s.Target; kind = 'binary'; name = $s.Bin.name; version = $s.Bin.version; sha256 = $s.Bin.sha256 }
+            if ($s.Icon) {
+                ViEnsureDir (Split-Path $s.Icon.Target -Parent)
+                if ($s.Icon.Temp) { Move-Item -Force -LiteralPath $s.Icon.Temp -Destination $s.Icon.Target }
+                $files += [ordered]@{ path = $s.Icon.Target; kind = 'icon'; name = $s.Bin.name; version = $s.Bin.version; sha256 = $s.Icon.Meta.sha256 }
+            }
             if ($s.Bin.kind -eq 'jar') {
                 $launcher = ViExpand $s.Bin.launcher.Replace('{installDir}', $installDir)
                 $cmd = "@echo off`r`njava -jar `"%~dp0$(Split-Path $s.Target -Leaf)`" %*`r`n"
@@ -261,7 +278,7 @@ function ViInvokeInstall {
                     if ($javaw) { $target = $javaw; $sargs = "-jar `"$($s.Target)`"" }
                     else { $target = ViExpand $s.Bin.launcher.Replace('{installDir}', $installDir) }
                 }
-                $icon = if ($s.Bin.kind -eq 'native') { $s.Target } else { $null }
+                $icon = if ($s.Icon) { $s.Icon.Target } elseif ($s.Bin.kind -eq 'native') { $s.Target } else { $null }
                 $places = @()
                 if ($sc.desktop) { $places += [Environment]::GetFolderPath('Desktop') }
                 if ($sc.startMenu) { $places += [Environment]::GetFolderPath('Programs') }
@@ -334,7 +351,8 @@ function ViInvokeInstall {
 
         New-Item -Path $uninstallKey -Force | Out-Null
         $uninstallCmd = Join-Path $installDir 'uninstall.cmd'
-        $icon = ($files | Where-Object { $_.kind -eq 'binary' -and $_.path -like '*.exe' } | Select-Object -First 1)
+        $icon = ($files | Where-Object { $_.kind -eq 'icon' } | Select-Object -First 1)
+        if (-not $icon) { $icon = ($files | Where-Object { $_.kind -eq 'binary' -and $_.path -like '*.exe' } | Select-Object -First 1) }
         $sizeKb = [int]((($files | Where-Object { Test-Path -LiteralPath $_.path } | ForEach-Object { (Get-Item -LiteralPath $_.path).Length } | Measure-Object -Sum).Sum) / 1KB)
         $props = @{
             DisplayName          = $appName

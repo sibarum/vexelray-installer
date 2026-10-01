@@ -21,6 +21,11 @@ public final class BinaryConfig {
     public String version;
     public Boolean addToPath;
     public ShortcutConfig shortcuts;
+    /**
+     * Icon for the shortcuts and the Apps entry: an {@code .ico}, or a square {@code .png} (256px or
+     * more) that is converted. Shipped next to the binary. Native exes fall back to their own icon.
+     */
+    public String icon;
     /** Minimum Java major version, for jars. */
     public Integer javaMin;
 }

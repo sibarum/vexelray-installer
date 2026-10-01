@@ -97,6 +97,11 @@ public final class InstallerGenerator {
                     throw new InstallerException("two binaries share the file name '" + rb.file() + "'");
                 bins.add(rb);
                 if (!assets.contains(rb.staged())) assets.add(rb.staged());
+                if (rb.icon() != null) {
+                    String iprev = fileHashes.put(rb.icon().file(), rb.icon().sha256());
+                    if (iprev != null) throw new InstallerException("icon file name '" + rb.icon().file() + "' collides with another file; give the binaries distinct names");
+                    assets.add(rb.icon().staged());
+                }
             }
             resolved.put(t, bins);
         }
@@ -214,17 +219,28 @@ public final class InstallerGenerator {
 
         Path staged = assetOut.resolve(file);
         Files.copy(src, staged, StandardCopyOption.REPLACE_EXISTING);
-        String url;
-        if (!InstallerConfig.blank(r.assetBaseUrl)) {
-            url = r.assetBaseUrl.replaceAll("/+$", "") + "/" + tag + "/" + file;
-        } else {
-            String repo = c.releasesRepoOrRepo();
-            if (repo == null) throw new InstallerException("'releasesRepo' or 'repo' is required");
-            url = "https://github.com/" + repo + "/releases/download/" + tag + "/" + file;
+
+        ResolvedBinary.ResolvedIcon icon = null;
+        if (!InstallerConfig.blank(b.icon)) {
+            Path isrc = Path.of(b.icon);
+            if (!isrc.isAbsolute()) isrc = r.baseDir.resolve(isrc);
+            if (!Files.isRegularFile(isrc)) throw new InstallerException("icon not found: " + isrc);
+            String iconFile = name + ".ico";
+            Path istaged = assetOut.resolve(iconFile);
+            IconFiles.toIco(isrc, istaged);
+            icon = new ResolvedBinary.ResolvedIcon(iconFile, assetUrl(c, r, tag, iconFile),
+                    sha256(istaged), Files.size(istaged), istaged);
         }
         return new ResolvedBinary(b, name, file, kind,
                 InstallerConfig.blank(b.version) ? version : b.version,
-                url, sha256(staged), Files.size(staged), staged);
+                assetUrl(c, r, tag, file), sha256(staged), Files.size(staged), staged, icon);
+    }
+
+    private static String assetUrl(InstallerConfig c, GenerationRequest r, String tag, String file) {
+        if (!InstallerConfig.blank(r.assetBaseUrl)) return r.assetBaseUrl.replaceAll("/+$", "") + "/" + tag + "/" + file;
+        String repo = c.releasesRepoOrRepo();
+        if (repo == null) throw new InstallerException("'releasesRepo' or 'repo' is required");
+        return "https://github.com/" + repo + "/releases/download/" + tag + "/" + file;
     }
 
     private static String stem(String file) {

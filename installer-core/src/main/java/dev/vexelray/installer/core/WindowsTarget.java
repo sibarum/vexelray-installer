@@ -61,6 +61,14 @@ public final class WindowsTarget implements PlatformTarget {
             e.put("installPath", "{installDir}\\" + rel);
             e.put("executable", true);
             e.put("addToPath", Boolean.TRUE.equals(bc.addToPath));
+            if (b.icon() != null) {
+                ObjectNode ic = e.putObject("icon");
+                ic.put("file", b.icon().file());
+                ic.put("url", b.icon().url());
+                ic.put("sha256", b.icon().sha256());
+                ic.put("size", b.icon().size());
+                ic.put("installPath", "{installDir}\\" + (sub.isEmpty() ? "" : sub + "\\") + b.icon().file());
+            }
             if (b.isJar()) {
                 String dir = ("{installDir}\\" + sub).replaceAll("\\\\+$", "");
                 e.put("launcher", dir + "\\" + b.name() + ".cmd");
