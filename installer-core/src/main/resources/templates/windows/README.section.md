@@ -32,6 +32,15 @@ Set these in the same PowerShell window *before* the install command:
 Everything installed is recorded in `{{INSTALL_DIR}}\install-manifest.json`, and a copy
 in `{{REGISTRY_DIR}}\{{ID}}.json`.
 
+### Other programs finding {{NAME}}
+
+Installs are independent, so {{NAME}} can sit next to other programs from the same
+installer. To start it from one of them without depending on PATH, read
+`{{REGISTRY_DIR}}\{{ID}}.json` and use `commands.<name>.path` - an absolute path to the
+executable (the `.cmd` launcher for a jar). Missing file means not installed. Pass arguments
+as usual; from Java use `new ProcessBuilder(path, args...)`, and for a `.cmd` launcher run it
+as `cmd.exe /c path args...`.
+
 ### Update
 
 ```powershell

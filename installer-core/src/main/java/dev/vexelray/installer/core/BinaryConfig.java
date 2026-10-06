@@ -13,7 +13,7 @@ public final class BinaryConfig {
     public String attached;
     /** File name as installed and as uploaded to the release; defaults to the source's name. */
     public String file;
-    /** {@code native} or {@code jar}; inferred from the extension when absent. */
+    /** {@code native}, {@code jar} or {@code archive} (a .zip unpacked into {@code dir}); inferred from the extension. */
     public String kind;
     /** Sub-folder of the install dir. */
     public String dir;
@@ -28,4 +28,28 @@ public final class BinaryConfig {
     public String icon;
     /** Minimum Java major version, for jars. */
     public Integer javaMin;
+    /** JVM options placed before {@code -jar} in the launcher and the shortcut. Jars only. */
+    public java.util.List<String> jvmArgs;
+    /**
+     * Id of another install that provides the JVM ({@code <its dir>\bin\java.exe}); the launcher finds it
+     * through the registry at launch time, so a runtime update needs no regeneration. Jars only.
+     */
+    public String runtime;
+    /**
+     * Archives only: command name -> path inside the archive (for example {@code java -> bin/java.exe}).
+     * Recorded as install-record commands so other programs can run them.
+     */
+    public java.util.Map<String, String> exposes;
+    /**
+     * Native executables only: the subject (for example {@code CN=Example Inc}) the file is Authenticode-signed
+     * with. The installer refuses a file whose signature is missing or from someone else. Sign before
+     * generating: the manifest hashes the file as given.
+     */
+    public String signedBy;
+    /**
+     * Optional SHA-1 thumbprint of the signing certificate. With it the installer accepts a certificate Windows
+     * does not chain to a trusted root (a self-signed one) as long as it is exactly this one; without it the
+     * signature must be trusted.
+     */
+    public String signerThumbprint;
 }

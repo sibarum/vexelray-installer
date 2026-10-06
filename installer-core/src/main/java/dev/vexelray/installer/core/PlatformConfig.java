@@ -10,4 +10,6 @@ public final class PlatformConfig {
     /** Where install manifests are recorded so the uninstaller can find every install. */
     public String registryDir;
     public List<BinaryConfig> binaries = new ArrayList<>();
+    /** Installs that must be present first; a binary's {@code runtime} is required implicitly. */
+    public List<Requirement> requires = new ArrayList<>();
 }

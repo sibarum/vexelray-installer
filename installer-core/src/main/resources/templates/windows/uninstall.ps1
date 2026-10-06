@@ -146,6 +146,13 @@ function ViInvokeUninstall {
         }
     }
 
+    $chosenIds = @($chosen | ForEach-Object { $_.id })
+    foreach ($r in $chosen) {
+        foreach ($u in @($records | Where-Object { ($chosenIds -notcontains $_.id) -and (@($_.requires) -contains $r.id) })) {
+            Write-Warning "$($u.name) still needs $($r.name) and will not start without it."
+        }
+    }
+
     if (-not $Yes) {
         foreach ($r in $chosen) { Write-Host "Will remove $($r.name) $($r.version) ($($r.installDir))" }
         $a = Read-Host "Continue? [y/N]"

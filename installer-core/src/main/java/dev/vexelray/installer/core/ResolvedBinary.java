@@ -18,4 +18,5 @@ public record ResolvedBinary(
     public record ResolvedIcon(String file, String url, String sha256, long size, Path staged) {}
 
     public boolean isJar() { return "jar".equals(kind); }
+    public boolean isArchive() { return "archive".equals(kind); }
 }

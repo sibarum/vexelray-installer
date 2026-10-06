@@ -87,6 +87,11 @@ public final class InstallerGenerator {
             PlatformConfig p = t.configOf(c);
             if (p.binaries == null || p.binaries.isEmpty())
                 throw new InstallerException(t.key() + " needs at least one binary");
+            for (Requirement rq : p.requires == null ? List.<Requirement>of() : p.requires) {
+                if (rq.id == null || !ID.matcher(rq.id).matches())
+                    throw new InstallerException("every 'requires' entry needs an 'id' (lowercase letters, digits, . _ -)");
+                if (!InstallerConfig.blank(rq.min)) Versions.parse(Versions.strip(rq.min));
+            }
             List<ResolvedBinary> bins = new ArrayList<>();
             for (BinaryConfig b : p.binaries) {
                 ResolvedBinary rb = stage(c, b, version, tag, r, assetOut);
@@ -212,10 +217,29 @@ public final class InstallerGenerator {
         if (!src.isAbsolute()) src = r.baseDir.resolve(src);
         if (!Files.isRegularFile(src)) throw new InstallerException("artifact not found: " + src);
         String file = InstallerConfig.blank(b.file) ? src.getFileName().toString() : b.file;
-        String kind = InstallerConfig.blank(b.kind) ? (file.endsWith(".jar") ? "jar" : "native") : b.kind;
-        if (!kind.equals("native") && !kind.equals("jar"))
-            throw new InstallerException("binary kind must be 'native' or 'jar', not '" + kind + "'");
+        String kind = InstallerConfig.blank(b.kind)
+                ? (file.endsWith(".jar") ? "jar" : file.endsWith(".zip") ? "archive" : "native") : b.kind;
+        if (!kind.equals("native") && !kind.equals("jar") && !kind.equals("archive"))
+            throw new InstallerException("binary kind must be 'native', 'jar' or 'archive', not '" + kind + "'");
         String name = InstallerConfig.blank(b.name) ? stem(file) : b.name;
+        if (!InstallerConfig.blank(b.signedBy) && !kind.equals("native"))
+            throw new InstallerException("'signedBy' only applies to native executables (" + file + ")");
+        if (InstallerConfig.blank(b.signedBy) && !InstallerConfig.blank(b.signerThumbprint))
+            throw new InstallerException("'signerThumbprint' needs 'signedBy' (" + file + ")");
+        if (!InstallerConfig.blank(b.signerThumbprint) && !b.signerThumbprint.matches("(?i)[0-9a-f]{40}"))
+            throw new InstallerException("'signerThumbprint' must be 40 hex characters (the certificate's SHA-1 thumbprint)");
+        if (kind.equals("archive")) checkArchive(b, src, file);
+        else if (b.exposes != null && !b.exposes.isEmpty())
+            throw new InstallerException("'exposes' only applies to archive binaries (" + file + ")");
+        boolean hasJvmArgs = b.jvmArgs != null && !b.jvmArgs.isEmpty();
+        if (!kind.equals("jar") && (hasJvmArgs || !InstallerConfig.blank(b.runtime)))
+            throw new InstallerException("'jvmArgs' and 'runtime' only apply to jar binaries (" + file + ")");
+        if (!InstallerConfig.blank(b.runtime) && !ID.matcher(b.runtime).matches())
+            throw new InstallerException("'runtime' must be an install id: lowercase letters, digits, . _ -");
+        if (hasJvmArgs) for (String a : b.jvmArgs) {
+            if (a == null || a.isBlank() || a.matches("(?s).*[\"%\\r\\n].*"))
+                throw new InstallerException("jvmArgs entries must be non-empty and contain no quotes, % or line breaks: " + a);
+        }
 
         Path staged = assetOut.resolve(file);
         Files.copy(src, staged, StandardCopyOption.REPLACE_EXISTING);
@@ -234,6 +258,30 @@ public final class InstallerGenerator {
         return new ResolvedBinary(b, name, file, kind,
                 InstallerConfig.blank(b.version) ? version : b.version,
                 assetUrl(c, r, tag, file), sha256(staged), Files.size(staged), staged, icon);
+    }
+
+    /** An archive is unpacked as-is, so only what makes no sense for a folder is refused here. */
+    private static void checkArchive(BinaryConfig b, Path zip, String file) throws IOException {
+        if (!file.endsWith(".zip")) throw new InstallerException("an archive must be a .zip file (" + file + ")");
+        if (Boolean.TRUE.equals(b.addToPath) || b.shortcuts != null || !InstallerConfig.blank(b.icon)
+                || b.javaMin != null || !InstallerConfig.blank(b.runtime) || (b.jvmArgs != null && !b.jvmArgs.isEmpty()))
+            throw new InstallerException("archive '" + file + "' cannot set addToPath, shortcuts, icon, javaMin, runtime or jvmArgs; "
+                    + "expose commands with 'exposes' instead");
+        java.util.Set<String> entries = new java.util.HashSet<>();
+        try (java.util.zip.ZipFile z = new java.util.zip.ZipFile(zip.toFile())) {
+            z.stream().forEach(e -> entries.add(e.getName().replace('\\', '/').toLowerCase(java.util.Locale.ROOT)));
+        } catch (java.util.zip.ZipException e) {
+            throw new InstallerException("not a valid zip: " + zip + " (" + e.getMessage() + ")");
+        }
+        if (b.exposes != null) b.exposes.forEach((cmd, rel) -> {
+            if (cmd == null || !cmd.matches("[A-Za-z0-9._-]+"))
+                throw new InstallerException("'exposes' command names are letters, digits, . _ - (got '" + cmd + "')");
+            String norm = rel == null ? "" : rel.replace('\\', '/');
+            if (norm.isBlank() || norm.startsWith("/") || norm.matches("(?s).*(^|/)\\.\\.(/|$).*") || norm.matches("(?s).*[\"%:*?<>|].*"))
+                throw new InstallerException("'exposes' path for '" + cmd + "' must be relative and inside the archive: " + rel);
+            if (!entries.contains(norm.toLowerCase(java.util.Locale.ROOT)))
+                throw new InstallerException("'exposes' path for '" + cmd + "' is not in " + file + ": " + rel);
+        });
     }
 
     private static String assetUrl(InstallerConfig c, GenerationRequest r, String tag, String file) {

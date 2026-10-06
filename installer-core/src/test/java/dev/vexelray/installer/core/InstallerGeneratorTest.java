@@ -221,6 +221,140 @@ class InstallerGeneratorTest {
         });
     }
 
+    GenerationResult runWith(java.util.function.Consumer<InstallerConfig> tweak) {
+        GenerationRequest r = new GenerationRequest();
+        r.config = config();
+        tweak.accept(r.config);
+        r.version = "1.0.0";
+        r.outDir = out;
+        r.assetsDir = assets;
+        r.baseDir = tmp;
+        return new InstallerGenerator().generate(r);
+    }
+
+    @Test
+    void runtimeJvmArgsAndRequiresLandInTheManifest() throws IOException {
+        runWith(c -> {
+            BinaryConfig jar = c.windows.binaries.get(1);
+            jar.runtime = "vexelray-runtime";
+            jar.jvmArgs = java.util.List.of("--enable-native-access=ALL-UNNAMED", "-Xmx512m");
+            Requirement rq = new Requirement();
+            rq.id = "other-app";
+            rq.min = "v2.1";
+            c.windows.requires.add(rq);
+        });
+        JsonNode win = manifest().path("versions").get(0).path("platforms").path("windows");
+        JsonNode jar = win.path("binaries").get(1);
+        assertEquals("vexelray-runtime", jar.path("runtime").asText());
+        assertEquals("-Xmx512m", jar.path("jvmArgs").get(1).asText());
+        // a binary that gets its JVM from a runtime no longer demands a PATH java
+        assertTrue(win.path("requires").path("java").isMissingNode());
+        JsonNode installs = win.path("requires").path("installs");
+        assertEquals("other-app", installs.get(0).path("id").asText());
+        assertEquals("2.1", installs.get(0).path("min").asText());
+        assertEquals("vexelray-runtime", installs.get(1).path("id").asText());
+        assertTrue(installs.get(1).path("min").isMissingNode());
+    }
+
+    void zip(String name, String... entries) throws IOException {
+        try (java.util.zip.ZipOutputStream z = new java.util.zip.ZipOutputStream(Files.newOutputStream(src.resolve(name)))) {
+            for (String e : entries) {
+                z.putNextEntry(new java.util.zip.ZipEntry(e));
+                z.write(e.getBytes(StandardCharsets.UTF_8));
+                z.closeEntry();
+            }
+        }
+    }
+
+    @Test
+    void anArchiveIsInferredFromZipAndListsItsExposedCommands() throws IOException {
+        zip("rt.zip", "bin/java.exe", "bin/javaw.exe", "lib/modules");
+        runWith(c -> {
+            BinaryConfig rt = new BinaryConfig();
+            rt.source = "src/rt.zip";
+            rt.name = "runtime";
+            rt.dir = "jre";
+            rt.exposes = new java.util.LinkedHashMap<>();
+            rt.exposes.put("java", "bin/java.exe");
+            rt.exposes.put("javaw", "BIN/javaw.exe");
+            c.windows.binaries.add(rt);
+        });
+        JsonNode e = manifest().path("versions").get(0).path("platforms").path("windows").path("binaries").get(2);
+        assertEquals("archive", e.path("kind").asText());
+        assertEquals("{installDir}\\jre", e.path("installPath").asText());
+        assertFalse(e.path("executable").asBoolean());
+        assertEquals("bin\\java.exe", e.path("exposes").path("java").asText());
+        assertEquals("rt.zip", e.path("file").asText());
+        // an archive has no launcher and demands no Java
+        assertTrue(e.path("launcher").isMissingNode());
+        assertTrue(Files.readString(out.resolve("README.md")).contains("archive (unpacked)"));
+    }
+
+    @Test
+    void archivesAreValidated() throws IOException {
+        zip("rt.zip", "bin/java.exe");
+        java.util.function.Consumer<java.util.function.Consumer<BinaryConfig>> bad = tweak -> assertThrows(InstallerException.class,
+                () -> runWith(c -> {
+                    BinaryConfig rt = new BinaryConfig();
+                    rt.source = "src/rt.zip";
+                    rt.exposes = new java.util.LinkedHashMap<>(java.util.Map.of("java", "bin/java.exe"));
+                    tweak.accept(rt);
+                    c.windows.binaries.add(rt);
+                }));
+        bad.accept(rt -> rt.exposes.put("nope", "bin/missing.exe"));        // not in the zip
+        bad.accept(rt -> rt.exposes.put("evil", "../outside.exe"));          // escapes the folder
+        bad.accept(rt -> rt.exposes.put("abs", "/bin/java.exe"));
+        bad.accept(rt -> rt.exposes.put("bad name", "bin/java.exe"));
+        bad.accept(rt -> rt.addToPath = true);
+        bad.accept(rt -> rt.runtime = "other");
+        // exposes on a non-archive, and a .zip that is not a zip
+        assertThrows(InstallerException.class, () -> runWith(c -> c.windows.binaries.get(0).exposes = java.util.Map.of("x", "y")));
+        Files.writeString(src.resolve("broken.zip"), "not a zip");
+        assertThrows(InstallerException.class, () -> runWith(c -> {
+            BinaryConfig rt = new BinaryConfig();
+            rt.source = "src/broken.zip";
+            c.windows.binaries.add(rt);
+        }));
+    }
+
+    @Test
+    void aSignedNativeBinaryRecordsItsSignerInTheManifest() throws IOException {
+        String thumb = "ab".repeat(20);
+        runWith(c -> {
+            c.windows.binaries.get(0).signedBy = "CN=Example Inc";
+            c.windows.binaries.get(0).signerThumbprint = thumb;
+        });
+        JsonNode sg = manifest().path("versions").get(0).path("platforms").path("windows")
+                .path("binaries").get(0).path("signature");
+        assertEquals("CN=Example Inc", sg.path("subject").asText());
+        assertEquals(thumb.toUpperCase(), sg.path("thumbprint").asText());
+        // unsigned binaries carry no signature node
+        assertTrue(manifest().path("versions").get(0).path("platforms").path("windows")
+                .path("binaries").get(1).path("signature").isMissingNode());
+    }
+
+    @Test
+    void signingOptionsAreValidated() {
+        assertThrows(InstallerException.class, () -> runWith(c -> c.windows.binaries.get(1).signedBy = "CN=X")); // a jar
+        assertThrows(InstallerException.class, () -> runWith(c -> c.windows.binaries.get(0).signerThumbprint = "ab".repeat(20)));
+        assertThrows(InstallerException.class, () -> runWith(c -> {
+            c.windows.binaries.get(0).signedBy = "CN=X";
+            c.windows.binaries.get(0).signerThumbprint = "not-hex";
+        }));
+    }
+
+    @Test
+    void jvmArgsAndRuntimeAreValidated() {
+        assertThrows(InstallerException.class, () -> runWith(c -> c.windows.binaries.get(0).runtime = "rt"));
+        assertThrows(InstallerException.class, () -> runWith(c -> c.windows.binaries.get(1).jvmArgs = java.util.List.of("-Dx=\"y\"")));
+        assertThrows(InstallerException.class, () -> runWith(c -> c.windows.binaries.get(1).jvmArgs = java.util.List.of("-Dx=%PATH%")));
+        assertThrows(InstallerException.class, () -> runWith(c -> c.windows.binaries.get(1).runtime = "Bad Id"));
+        assertThrows(InstallerException.class, () -> runWith(c -> {
+            Requirement rq = new Requirement();
+            c.windows.requires.add(rq);
+        }));
+    }
+
     @Test
     void nonAsciiNameIsRejectedWithAClearMessage() throws IOException {
         GenerationRequest r = new GenerationRequest();

@@ -80,7 +80,8 @@ Defaults come from the project: `id` = artifactId, `name` = project name, `descr
 | `releasesRepo`, `tagFormat` | where binaries are downloaded from; defaults `repo` and `v{version}` |
 | `windows.installDir` | default `%LOCALAPPDATA%\Programs\{name}` |
 | `windows.registryDir` | where install manifests live; default `%LOCALAPPDATA%\vexelray-installer\installs` |
-| `windows.binaries[]` | `source` *or* `attached` (`main` or a classifier), `name`, `file`, `kind` (`native`/`jar`, inferred from the extension), `dir`, `version`, `addToPath`, `icon` (an `.ico`, or a square `.png` of 256px or more that is converted to one; used by the shortcuts and the Apps entry), `shortcuts {desktop, startMenu, label, gui}`, `javaMin` (jars) |
+| `windows.binaries[]` | `source` *or* `attached` (`main` or a classifier), `name`, `file`, `kind` (`native`/`jar`/`archive`, inferred from the extension; a `.zip` is an archive), `dir`, `version`, `addToPath`, `icon` (an `.ico`, or a square `.png` of 256px or more that is converted to one; used by the shortcuts and the Apps entry), `shortcuts {desktop, startMenu, label, gui}`, `javaMin` (jars), `jvmArgs[]` (jars; placed before `-jar`), `runtime` (jars; id of an install that provides `binjava.exe`, found through the registry at launch), `exposes` (archives; `{command: path-inside-zip}`, recorded under `commands`), `signedBy` + `signerThumbprint` (native exes; see Signing) |
+| `windows.requires[]` | `{id, min}`: installs that must be present first. A binary's `runtime` is required implicitly. The installer refuses, before changing anything, if one is missing or older than `min`; the uninstaller warns when removing something another install still needs |
 | `outputDirectory`, `assetsDirectory` | default `target/installer` and `target/installer-assets` |
 | `notes`, `baseUrl`, `assetBaseUrl`, `skip` | release notes; URL overrides for testing; skip the goal |
 
@@ -103,6 +104,19 @@ config file.
   optionally edits the user PATH, and registers an Apps & features entry. Nothing is written
   to the install dir until every download has verified. Options: `INSTALL_VERSION`,
   `INSTALL_DIR`, `INSTALL_NO_SHORTCUTS`, `INSTALL_NO_PATH`, `INSTALL_FORCE`.
+- **Archives** (`kind: archive`, a `.zip`) are verified, unpacked into `dir` (default: the install
+  folder) and every extracted file is recorded, so updates remove files a newer archive dropped
+  and uninstall removes them all. Use it for something like a jlink runtime image; `exposes`
+  names the commands inside it (`java: bin/java.exe`), and generating fails if a path is not in
+  the zip. An archive cannot also set `addToPath`, `shortcuts`, `icon`, `runtime` or `jvmArgs`.
+  Jars in other installs point their `runtime` at an archive install's id.
+- **Signing** (native exes): sign the file *first*, then generate, because the manifest hashes the file
+  as given. `signedBy` (a subject such as `CN=Example Inc`) makes the installer refuse a download that
+  is unsigned or signed by someone else, before anything is placed. By itself it also needs Windows to
+  trust the signature. `signerThumbprint` pins one certificate instead, so a self-signed (snake-oil)
+  certificate works for testing: it is accepted only if it is exactly that certificate, with a warning
+  that this machine does not trust it. The SHA-256 already guarantees the file is the published one;
+  the signature adds who published it.
 - **Install manifest**: written to `<installDir>\install-manifest.json` and to
   `<registryDir>\<id>.json`: every file with path/kind/version/hash, shortcuts, PATH entries
   and registry keys.

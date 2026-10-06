@@ -58,7 +58,8 @@ function ViInvokeUpdate {
 
     $changes = @()
     foreach ($b in @($plat.binaries)) {
-        $have = @($rec.files) | Where-Object { $_.kind -eq 'binary' -and $_.name -eq $b.name } | Select-Object -First 1
+        $have = if ($b.kind -eq 'archive') { @($rec.archives) | Where-Object { $_.name -eq $b.name } | Select-Object -First 1 }
+                else { @($rec.files) | Where-Object { $_.kind -eq 'binary' -and $_.name -eq $b.name } | Select-Object -First 1 }
         if (-not $have) { $changes += "{0}: new (-> {1})" -f $b.name, $b.version; continue }
         $c = ViCompare $b.version $have.version
         if ($c -gt 0) { $changes += "{0}: {1} -> {2}" -f $b.name, $have.version, $b.version }

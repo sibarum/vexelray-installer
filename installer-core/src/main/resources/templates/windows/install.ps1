@@ -125,6 +125,74 @@ function ViJavaMajor([string]$javaExe) {
     return 0
 }
 
+# Authenticode check for a downloaded native executable, when the manifest says it is signed.
+# With a pinned thumbprint a certificate Windows cannot chain to a trusted root (a self-signed one)
+# is accepted if it is exactly that certificate; without one the signature must be trusted.
+function ViCheckSignature([string]$path, $meta, [string]$label) {
+    if (-not $meta) { return }
+    $sig = Get-AuthenticodeSignature -LiteralPath $path
+    $st = [string]$sig.Status
+    if ($st -eq 'NotSigned') { throw "$label is not signed, but the manifest says it is signed by $($meta.subject). Nothing was installed." }
+    if ($st -eq 'HashMismatch') { throw "$label was altered after it was signed. Nothing was installed." }
+    $cert = $sig.SignerCertificate
+    if (-not $cert) { throw "$label has no usable signature ($st). Nothing was installed." }
+    if ($cert.Subject.IndexOf([string]$meta.subject, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+        throw "$label is signed by $($cert.Subject), not $($meta.subject). Nothing was installed."
+    }
+    if ($meta.thumbprint) {
+        if ($cert.Thumbprint -ne ([string]$meta.thumbprint).ToUpperInvariant()) {
+            throw "$label is signed by a different certificate than the manifest pins ($($cert.Thumbprint)). Nothing was installed."
+        }
+        if ($st -ne 'Valid') { Write-Warning "$label is signed by the pinned certificate $($cert.Thumbprint), which this machine does not trust ($st)." }
+    } elseif ($st -ne 'Valid') {
+        throw "$label has a signature from $($cert.Subject) that is not trusted ($st). Nothing was installed."
+    }
+    ViInfo "$label signed by $($cert.Subject)"
+}
+
+# Unpacks a zip, refusing entries that would land outside $dest.
+function ViExpandZip([string]$zip, [string]$dest) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    ViEnsureDir $dest
+    $root = [IO.Path]::GetFullPath($dest).TrimEnd('\') + '\'
+    $z = [IO.Compression.ZipFile]::OpenRead($zip)
+    try {
+        foreach ($e in $z.Entries) {
+            $p = [IO.Path]::GetFullPath((Join-Path $dest $e.FullName))
+            if (-not $p.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { throw "Archive entry would leave the target folder: $($e.FullName)" }
+            if ($e.FullName.EndsWith('/') -or $e.FullName.EndsWith('\')) { ViEnsureDir $p; continue }
+            ViEnsureDir (Split-Path $p -Parent)
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($e, $p, $true)
+        }
+    } finally { $z.Dispose() }
+}
+
+function ViReadRecord([string]$id) {
+    $p = Join-Path (ViRegistryDir) "$id.json"
+    if (Test-Path -LiteralPath $p) { try { return (Get-Content -Raw -LiteralPath $p | ConvertFrom-Json) } catch { } }
+    return $null
+}
+
+function ViQuoteArg([string]$a) { if ($a -match '\s') { "`"$a`"" } else { $a } }
+
+function ViJvmArgs($b) {
+    $o = @()
+    foreach ($a in @($b.jvmArgs)) { if ($a) { $o += (ViQuoteArg $a) } }
+    return ($o -join ' ')
+}
+
+# The .cmd that starts a jar. With a runtime it reads <registryDir>\<runtime>.home (one line: that
+# install's folder) every time, so updating the runtime never leaves launchers pointing at a stale JVM.
+function ViJarLauncher($b, [string]$jarName) {
+    $jvm = ViJvmArgs $b
+    if ($jvm) { $jvm = " $jvm" }
+    if ($b.runtime) {
+        $ptr = Join-Path (ViRegistryDir) "$($b.runtime).home"
+        return "@echo off`r`nsetlocal`r`nset `"VI_RT=`"`r`nset /p VI_RT=<`"$ptr`"`r`nif not exist `"%VI_RT%\bin\java.exe`" (`r`n  echo %~n0: the runtime '$($b.runtime)' is not installed 1>&2`r`n  exit /b 1`r`n)`r`n`"%VI_RT%\bin\java.exe`"$jvm -jar `"%~dp0$jarName`" %*`r`n"
+    }
+    return "@echo off`r`njava$jvm -jar `"%~dp0$jarName`" %*`r`n"
+}
+
 function ViShortcut([string]$lnk, [string]$target, [string]$arguments, [string]$workDir, [string]$desc, [string]$icon) {
     ViEnsureDir (Split-Path $lnk -Parent)
     $s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
@@ -160,6 +228,15 @@ function ViInvokeInstall {
     $plat = $entry.platforms.windows
     if (-not $plat) { throw "$appName $want has no Windows build." }
 
+    foreach ($rq in @($plat.requires.installs)) {
+        if (-not $rq.id) { continue }
+        $dep = ViReadRecord $rq.id
+        if (-not $dep) { throw "$appName needs '$($rq.id)' to be installed first. Install it, then run this again." }
+        if ($rq.min -and (ViCompare $dep.version $rq.min) -lt 0) {
+            throw "$appName needs $($rq.id) $($rq.min) or newer, but $($dep.version) is installed. Update it first."
+        }
+    }
+
     $regDir = ViRegistryDir
     $recPath = Join-Path $regDir "$id.json"
     $old = $null
@@ -176,7 +253,7 @@ function ViInvokeInstall {
     }
 
     $bins = @($plat.binaries)
-    $jars = @($bins | Where-Object { $_.kind -eq 'jar' })
+    $jars = @($bins | Where-Object { $_.kind -eq 'jar' -and -not $_.runtime })
     if ($jars.Count -gt 0) {
         $java = ViFindJava 'java'
         $need = [int]$plat.requires.java
@@ -207,6 +284,32 @@ function ViInvokeInstall {
                 }
                 $ic = [pscustomobject]@{ Target = $itarget; Temp = $itemp; Meta = $b.icon }
             }
+            if ($b.kind -eq 'archive') {
+                $adir = ViExpand $b.installPath.Replace('{installDir}', $installDir)
+                $prev = $null
+                if ($old) { $prev = @($old.archives) | Where-Object { $_.name -eq $b.name -and $_.sha256 -eq $b.sha256 -and $_.dir -eq $adir } | Select-Object -First 1 }
+                $intact = [bool]$prev
+                if ($intact) {
+                    foreach ($f in @($old.files)) {
+                        if ($f.kind -eq 'archive-file' -and $f.name -eq $b.name -and -not (Test-Path -LiteralPath $f.path)) { $intact = $false; break }
+                    }
+                }
+                if ($intact) {
+                    ViInfo "$($b.file) is already current"
+                    $staged += [pscustomobject]@{ Bin = $b; Target = $adir; Temp = $null; Extracted = $null; Icon = $null }
+                    continue
+                }
+                ViInfo ("{0} ({1:N1} MB)" -f $b.file, ($b.size / 1MB))
+                $dl = Join-Path $tmp $b.file
+                Invoke-WebRequest -UseBasicParsing -Uri $b.url -OutFile $dl
+                if ((ViSha $dl) -ne $b.sha256) { throw "Checksum mismatch for $($b.file) downloaded from $($b.url). Nothing was installed." }
+                ViInfo "Unpacking $($b.file)"
+                $xdir = Join-Path $tmp ("x-" + $b.name)
+                ViExpandZip $dl $xdir
+                Remove-Item -Force -LiteralPath $dl
+                $staged += [pscustomobject]@{ Bin = $b; Target = $adir; Temp = $null; Extracted = $xdir; Icon = $null }
+                continue
+            }
             $target = ViExpand $b.installPath.Replace('{installDir}', $installDir)
             if ((Test-Path -LiteralPath $target) -and ((ViSha $target) -eq $b.sha256)) {
                 ViInfo "$($b.file) is already current"
@@ -217,6 +320,7 @@ function ViInvokeInstall {
             $dl = Join-Path $tmp $b.file
             Invoke-WebRequest -UseBasicParsing -Uri $b.url -OutFile $dl
             if ((ViSha $dl) -ne $b.sha256) { throw "Checksum mismatch for $($b.file) downloaded from $($b.url). Nothing was installed." }
+            ViCheckSignature $dl $b.signature $b.file
             $staged += [pscustomobject]@{ Bin = $b; Target = $target; Temp = $dl; Icon = $ic }
         }
         $tools = @()
@@ -233,7 +337,25 @@ function ViInvokeInstall {
         ViStep "Installing to $installDir"
         ViEnsureDir $installDir
         $files = @()
+        $archives = @()
         foreach ($s in $staged) {
+            if ($s.Bin.kind -eq 'archive') {
+                ViEnsureDir $s.Target
+                if ($s.Extracted) {
+                    $xroot = $s.Extracted.TrimEnd('\')
+                    foreach ($f in @(Get-ChildItem -LiteralPath $xroot -Recurse -File -Force)) {
+                        $dest = Join-Path $s.Target $f.FullName.Substring($xroot.Length).TrimStart('\')
+                        ViEnsureDir (Split-Path $dest -Parent)
+                        try { Move-Item -Force -LiteralPath $f.FullName -Destination $dest }
+                        catch { throw "Could not write ${dest}: $($_.Exception.Message) Close $appName if it is running and try again." }
+                        $files += [ordered]@{ path = $dest; kind = 'archive-file'; name = $s.Bin.name; version = $s.Bin.version; sha256 = $null }
+                    }
+                } else {
+                    foreach ($f in @($old.files)) { if ($f.kind -eq 'archive-file' -and $f.name -eq $s.Bin.name) { $files += $f } }
+                }
+                $archives += [ordered]@{ name = $s.Bin.name; version = $s.Bin.version; sha256 = $s.Bin.sha256; dir = $s.Target }
+                continue
+            }
             ViEnsureDir (Split-Path $s.Target -Parent)
             if ($s.Temp) {
                 try { Move-Item -Force -LiteralPath $s.Temp -Destination $s.Target }
@@ -248,8 +370,7 @@ function ViInvokeInstall {
             }
             if ($s.Bin.kind -eq 'jar') {
                 $launcher = ViExpand $s.Bin.launcher.Replace('{installDir}', $installDir)
-                $cmd = "@echo off`r`njava -jar `"%~dp0$(Split-Path $s.Target -Leaf)`" %*`r`n"
-                ViWriteText $launcher $cmd
+                ViWriteText $launcher (ViJarLauncher $s.Bin (Split-Path $s.Target -Leaf))
                 $files += [ordered]@{ path = $launcher; kind = 'launcher'; name = $s.Bin.name; version = $s.Bin.version; sha256 = (ViSha $launcher) }
             }
         }
@@ -264,6 +385,12 @@ function ViInvokeInstall {
             $files += [ordered]@{ path = $wrapper; kind = 'tool'; name = (Split-Path $wrapper -Leaf); version = $entry.version; sha256 = (ViSha $wrapper) }
         }
 
+        # other installs' launchers read this to find this install (see ViJarLauncher)
+        ViEnsureDir $regDir
+        $pointer = Join-Path $regDir "$id.home"
+        ViWriteText $pointer "$installDir`r`n"
+        $files += [ordered]@{ path = $pointer; kind = 'pointer'; name = "$id.home"; version = $entry.version; sha256 = (ViSha $pointer) }
+
         # 3. shortcuts
         $shortcuts = @()
         $skipShortcuts = $NoShortcuts -or [bool]$env:INSTALL_NO_SHORTCUTS
@@ -274,8 +401,20 @@ function ViInvokeInstall {
                 $label = if ($sc.label) { $sc.label } else { $s.Bin.name }
                 $target = $s.Target; $sargs = ''
                 if ($s.Bin.kind -eq 'jar') {
-                    $javaw = if ($sc.gui) { ViFindJava 'javaw' } else { $null }
-                    if ($javaw) { $target = $javaw; $sargs = "-jar `"$($s.Target)`"" }
+                    $javaw = $null
+                    if ($sc.gui) {
+                        if ($s.Bin.runtime) {
+                            $rt = ViReadRecord $s.Bin.runtime
+                            if ($rt) {
+                                $cand = Join-Path $rt.installDir 'bin\javaw.exe'
+                                if (Test-Path -LiteralPath $cand) { $javaw = $cand }
+                            }
+                        } else { $javaw = ViFindJava 'javaw' }
+                    }
+                    if ($javaw) {
+                        $target = $javaw
+                        $sargs = (@((ViJvmArgs $s.Bin), "-jar `"$($s.Target)`"") | Where-Object { $_ }) -join ' '
+                    }
                     else { $target = ViExpand $s.Bin.launcher.Replace('{installDir}', $installDir) }
                 }
                 $icon = if ($s.Icon) { $s.Icon.Target } elseif ($s.Bin.kind -eq 'native') { $s.Target } else { $null }
@@ -311,11 +450,20 @@ function ViInvokeInstall {
 
         # 5. clean up whatever the previous install had that this one does not
         if ($old) {
-            $newPaths = @($files | ForEach-Object { $_.path })
+            $newPaths = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+            foreach ($nf in $files) { [void]$newPaths.Add([string]$nf.path) }
             foreach ($f in @($old.files)) {
-                if ($f.path -and ($newPaths -notcontains $f.path) -and (Test-Path -LiteralPath $f.path)) {
+                if ($f.path -and (-not $newPaths.Contains([string]$f.path)) -and (Test-Path -LiteralPath $f.path)) {
                     Remove-Item -Force -LiteralPath $f.path -ErrorAction SilentlyContinue
                 }
+            }
+            # an updated archive may have dropped folders; remove the ones left empty
+            foreach ($a in $archives) {
+                if (-not (Test-Path -LiteralPath $a.dir)) { continue }
+                Get-ChildItem -LiteralPath $a.dir -Directory -Recurse -Force |
+                    Sort-Object { $_.FullName.Length } -Descending |
+                    Where-Object { -not (Get-ChildItem -LiteralPath $_.FullName -Force) } |
+                    Remove-Item -Force -ErrorAction SilentlyContinue
             }
             foreach ($l in @($old.shortcuts)) {
                 if ($l -and ($shortcuts -notcontains $l) -and (Test-Path -LiteralPath $l)) { Remove-Item -Force -LiteralPath $l -ErrorAction SilentlyContinue }
@@ -326,6 +474,21 @@ function ViInvokeInstall {
         }
 
         # 6. install manifest + uninstall registration
+        # `commands` is how other installed programs find and start these binaries without
+        # relying on PATH: name -> absolute path to run (the .cmd launcher for a jar).
+        $commands = [ordered]@{}
+        foreach ($s in $staged) {
+            if ($s.Bin.kind -eq 'archive') {
+                if ($s.Bin.exposes) {
+                    foreach ($cn in $s.Bin.exposes.PSObject.Properties) {
+                        $commands[$cn.Name] = [ordered]@{ path = (Join-Path $s.Target $cn.Value); kind = 'native'; version = $s.Bin.version }
+                    }
+                }
+                continue
+            }
+            $run = if ($s.Bin.kind -eq 'jar') { ViExpand $s.Bin.launcher.Replace('{installDir}', $installDir) } else { $s.Target }
+            $commands[$s.Bin.name] = [ordered]@{ path = $run; kind = $s.Bin.kind; version = $s.Bin.version }
+        }
         $now = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
         $uninstallKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$id"
         $record = [ordered]@{
@@ -339,6 +502,9 @@ function ViInvokeInstall {
             updatedAt     = $now
             installDir    = $installDir
             manifestUrl   = $InstallerCfg.manifestUrl
+            requires      = @(@($plat.requires.installs) | Where-Object { $_ } | ForEach-Object { $_.id })
+            commands      = $commands
+            archives      = $archives
             files         = $files
             shortcuts     = $shortcuts
             pathEntries   = $pathEntries

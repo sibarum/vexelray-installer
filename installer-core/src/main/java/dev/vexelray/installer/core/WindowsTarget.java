@@ -44,6 +44,9 @@ public final class WindowsTarget implements PlatformTarget {
         platform.put("installDir", installDir(c, p));
 
         int javaMin = -1;
+        Map<String, String> needs = new java.util.LinkedHashMap<>();
+        for (Requirement rq : p.requires == null ? List.<Requirement>of() : p.requires)
+            needs.put(rq.id, InstallerConfig.blank(rq.min) ? "" : Versions.strip(rq.min));
         ArrayNode binaries = Json.NODES.arrayNode();
         for (ResolvedBinary b : bins) {
             BinaryConfig bc = b.config();
@@ -58,9 +61,19 @@ public final class WindowsTarget implements PlatformTarget {
             e.put("url", b.url());
             e.put("sha256", b.sha256());
             e.put("size", b.size());
-            e.put("installPath", "{installDir}\\" + rel);
-            e.put("executable", true);
+            // an archive is unpacked into this folder; every other kind is the file itself
+            e.put("installPath", b.isArchive() ? ("{installDir}\\" + sub).replaceAll("\\\\+$", "") : "{installDir}\\" + rel);
+            e.put("executable", !b.isArchive());
+            if (b.isArchive() && bc.exposes != null && !bc.exposes.isEmpty()) {
+                ObjectNode ex = e.putObject("exposes");
+                bc.exposes.forEach((cmd, p2) -> ex.put(cmd, p2.replace('/', '\\')));
+            }
             e.put("addToPath", Boolean.TRUE.equals(bc.addToPath));
+            if (!InstallerConfig.blank(bc.signedBy)) {
+                ObjectNode sg = e.putObject("signature");
+                sg.put("subject", bc.signedBy);
+                if (!InstallerConfig.blank(bc.signerThumbprint)) sg.put("thumbprint", bc.signerThumbprint.toUpperCase(Locale.ROOT));
+            }
             if (b.icon() != null) {
                 ObjectNode ic = e.putObject("icon");
                 ic.put("file", b.icon().file());
@@ -72,7 +85,15 @@ public final class WindowsTarget implements PlatformTarget {
             if (b.isJar()) {
                 String dir = ("{installDir}\\" + sub).replaceAll("\\\\+$", "");
                 e.put("launcher", dir + "\\" + b.name() + ".cmd");
-                javaMin = Math.max(javaMin, bc.javaMin == null ? 0 : bc.javaMin);
+                if (InstallerConfig.blank(bc.runtime)) javaMin = Math.max(javaMin, bc.javaMin == null ? 0 : bc.javaMin);
+                else {
+                    e.put("runtime", bc.runtime);
+                    needs.putIfAbsent(bc.runtime, "");
+                }
+                if (bc.jvmArgs != null && !bc.jvmArgs.isEmpty()) {
+                    ArrayNode ja = e.putArray("jvmArgs");
+                    bc.jvmArgs.forEach(ja::add);
+                }
             }
             ShortcutConfig sc = bc.shortcuts;
             if (sc != null) {
@@ -84,7 +105,18 @@ public final class WindowsTarget implements PlatformTarget {
             }
             binaries.add(e);
         }
-        if (javaMin >= 0) platform.putObject("requires").put("java", javaMin);
+        if (javaMin >= 0 || !needs.isEmpty()) {
+            ObjectNode req = platform.putObject("requires");
+            if (javaMin >= 0) req.put("java", javaMin);
+            if (!needs.isEmpty()) {
+                ArrayNode installs = req.putArray("installs");
+                needs.forEach((id, min) -> {
+                    ObjectNode n = installs.addObject();
+                    n.put("id", id);
+                    if (!min.isEmpty()) n.put("min", min);
+                });
+            }
+        }
         platform.set("binaries", binaries);
         return platform;
     }
@@ -101,7 +133,8 @@ public final class WindowsTarget implements PlatformTarget {
         for (ResolvedBinary b : bins) {
             shortcuts |= b.config().shortcuts != null;
             onPath |= Boolean.TRUE.equals(b.config().addToPath);
-            if (b.isJar()) javaMin = Math.max(javaMin, b.config().javaMin == null ? 0 : b.config().javaMin);
+            if (b.isJar() && InstallerConfig.blank(b.config().runtime))
+                javaMin = Math.max(javaMin, b.config().javaMin == null ? 0 : b.config().javaMin);
         }
         String installDir = installDir(c, p);
 
@@ -119,9 +152,11 @@ public final class WindowsTarget implements PlatformTarget {
         for (ResolvedBinary b : bins) {
             String sub = b.config().dir == null ? "" : b.config().dir.replaceAll("^[/\\\\]+|[/\\\\]+$", "");
             String rel = sub.isEmpty() ? b.file() : sub + "\\" + b.file();
-            table.add("| `" + b.file() + "` | " + (b.isJar() ? "Java uberjar" : "native executable") + " | "
+            String kindText = b.isJar() ? "Java uberjar" : b.isArchive() ? "archive (unpacked)" : "native executable";
+            String where = b.isArchive() ? installDir + (sub.isEmpty() ? "" : "\\" + sub) + "\\" : installDir + "\\" + rel;
+            table.add("| `" + b.file() + "` | " + kindText + " | "
                     + b.version() + " | " + String.format(Locale.ROOT, "%.1f", b.size() / 1048576.0) + " MB | `"
-                    + installDir + "\\" + rel + "` |");
+                    + where + "` |");
         }
 
         String javaNote = "";

@@ -59,6 +59,9 @@ try {
     Check ((Test-Path "$installDir\uninstall.cmd") -and (Test-Path "$installDir\update.cmd")) 'uninstall/update present'
     Check (Test-Path "$regDir\vi-smoke.json") 'registry manifest written'
     Check (Test-Path "$installDir\install-manifest.json") 'install-manifest.json written'
+    $rec0 = Get-Content -Raw "$regDir\vi-smoke.json" | ConvertFrom-Json
+    Check ($rec0.commands.app.path -eq "$installDir\app.exe") 'record lists native command path'
+    Check ($rec0.commands.tool.path -eq "$installDir\tool.cmd") 'record lists jar launcher as command path'
     $desktop = [Environment]::GetFolderPath('Desktop')
     Check ((Test-Path "$desktop\ViSmoke.lnk") -and (Test-Path "$desktop\ViSmoke Tool.lnk")) 'desktop shortcuts'
     Check (Test-Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\vi-smoke") 'Apps & features entry'
@@ -95,10 +98,143 @@ try {
     Check (-not (Test-Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\vi-smoke")) 'Apps entry gone'
     $pathAfter = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment').GetValue('Path', '', 'DoNotExpandEnvironmentNames')
     Check ($pathAfter -eq $pathBefore) 'user PATH restored exactly'
+
+    # ---- two installs: a runtime, and an app that needs it ---------------------------------
+    Write-Host "runtime + dependent app"
+    function BuildTo([string]$cfg, [string]$name, [string]$ver) {
+        & java -jar $cli.FullName --config "$root\$cfg" --version $ver --out "$root\site-$name" --assets "$root\assets-$name" `
+            --base-url "$base/site-$name" --asset-base-url "$base/assets-$name" --notes "smoke $name $ver" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "generator failed for $name" }
+    }
+    function InstallFrom([string]$name, [string]$dir) {
+        $env:INSTALL_DIR = $dir
+        $o = powershell -NoProfile -ExecutionPolicy Bypass -File "$root\site-$name\install.ps1" 2>&1 | Out-String
+        $o -split "`n" | ForEach-Object { if ($_.Trim()) { Write-Host "    | $($_.TrimEnd())" } }
+        return $o
+    }
+    $rtDir = "$root\rt dir"; $appDir = "$root\app2 dir"
+    # a fake jlink-style runtime image: bin\java.exe stands in for the JVM (where.exe), plus a few other files
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    function MakeRuntimeZip([string[]]$extra) {
+        $stage = "$root\rt-stage"
+        Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path "$stage\bin", "$stage\lib" | Out-Null
+        Copy-Item "$env:windir\System32\where.exe" "$stage\bin\java.exe"
+        Copy-Item "$env:windir\System32\where.exe" "$stage\bin\javaw.exe"
+        [IO.File]::WriteAllText("$stage\lib\modules", "modules")
+        foreach ($x in $extra) { New-Item -ItemType Directory -Force -Path (Split-Path "$stage\$x" -Parent) | Out-Null; [IO.File]::WriteAllText("$stage\$x", $x) }
+        Remove-Item -Force "$root\src\rt.zip" -ErrorAction SilentlyContinue
+        [IO.Compression.ZipFile]::CreateFromDirectory($stage, "$root\src\rt.zip")
+    }
+    MakeRuntimeZip @('lib\old\gone.txt')
+    [IO.File]::WriteAllText("$root\src\app2.jar", "not really a jar")
+    @{ id = 'vi-rt'; name = 'ViRuntime'; version = '1.0.0'; repo = 'o/r'; tagFormat = '{version}'
+       windows = @{ installDir = $rtDir; binaries = @(@{ name = 'runtime'; source = 'src/rt.zip'; exposes = @{ java = 'bin/java.exe'; javaw = 'bin/javaw.exe' } }) }
+    } | ConvertTo-Json -Depth 8 | Set-Content -Encoding ASCII "$root\rt.json"
+    function App2Config([string]$min) {
+        @{ id = 'vi-app2'; name = 'ViApp2'; version = '1.0.0'; repo = 'o/r'; tagFormat = '{version}'
+           windows = @{ installDir = $appDir
+                        requires = @(@{ id = 'vi-rt'; min = $min })
+                        binaries = @(@{ name = 'app2'; source = 'src/app2.jar'; runtime = 'vi-rt'; jvmArgs = @('-Xmx64m', '-Dx=a b') }) }
+        } | ConvertTo-Json -Depth 8 | Set-Content -Encoding ASCII "$root\app2.json"
+    }
+    App2Config '2.0'
+    BuildTo 'rt.json' 'rt' '1.0.0'; BuildTo 'app2.json' 'app2' '1.0.0'
+
+    $out = InstallFrom 'app2' $appDir
+    Check ($out -match "needs 'vi-rt' to be installed first") 'dependent refuses to install without its runtime'
+    Check (-not (Test-Path "$appDir\app2.jar")) 'nothing was installed by the refused install'
+    $out = InstallFrom 'rt' $rtDir
+    Check ((Test-Path "$rtDir\bin\java.exe") -and (Test-Path "$regDir\vi-rt.home")) 'runtime installed with its pointer file'
+    Check ((Get-Content -Raw "$regDir\vi-rt.home").Trim() -eq $rtDir) 'pointer file holds the runtime folder'
+    Check ((Test-Path "$rtDir\lib\modules") -and (Test-Path "$rtDir\lib\old\gone.txt")) 'archive unpacked with its folder structure'
+    $recRt = Get-Content -Raw "$regDir\vi-rt.json" | ConvertFrom-Json
+    Check ($recRt.commands.java.path -eq "$rtDir\bin\java.exe" -and $recRt.commands.javaw.path -eq "$rtDir\bin\javaw.exe") 'archive exposes its commands in the record'
+    Check (@($recRt.files | Where-Object { $_.kind -eq 'archive-file' }).Count -eq 4 -and @($recRt.archives).Count -eq 1) 'record lists every unpacked file and the archive'
+    $out = InstallFrom 'app2' $appDir
+    Check ($out -match '2\.0 or newer') 'dependent refuses a runtime that is too old'
+    App2Config '1.0'; BuildTo 'app2.json' 'app2' '1.0.0'
+    $out = InstallFrom 'app2' $appDir
+    Check (Test-Path "$appDir\app2.jar") 'dependent installs once the runtime satisfies it'
+    $launcher = Get-Content -Raw "$appDir\app2.cmd"
+    Check ($launcher -match 'set /p VI_RT=<' -and $launcher -match '-Xmx64m "-Dx=a b" -jar') 'launcher resolves the runtime and carries jvmArgs'
+    $rec2 = Get-Content -Raw "$regDir\vi-app2.json" | ConvertFrom-Json
+    Check (@($rec2.requires) -contains 'vi-rt') 'record lists what the app requires'
+    # the stand-in java.exe is where.exe, which rejects "-Xmx64m" and exits 2 (a missing runtime exits 1)
+    & cmd.exe /c "`"$appDir\app2.cmd`" one two" 2>&1 | Out-Null
+    Check ($LASTEXITCODE -eq 2) 'launcher ran the runtime java.exe with the arguments'
+
+    # update the runtime: one file dropped, one added; the folder left empty must go too
+    MakeRuntimeZip @('lib\added\new.txt')
+    BuildTo 'rt.json' 'rt' '1.1.0'
+    $out = & "$rtDir\update.cmd" -Yes 2>&1 | Out-String
+    $out -split "`n" | ForEach-Object { if ($_.Trim()) { Write-Host "    | $($_.TrimEnd())" } }
+    Check ((Test-Path "$rtDir\lib\added\new.txt") -and -not (Test-Path "$rtDir\lib\old")) 'archive update adds new files and removes dropped files and folders'
+    Check ((Get-Content -Raw "$regDir\vi-rt.json" | ConvertFrom-Json).version -eq '1.1.0') 'runtime record at 1.1.0'
+    & cmd.exe /c "`"$appDir\app2.cmd`" one" 2>&1 | Out-Null
+    Check ($LASTEXITCODE -eq 2) 'dependent app still starts after the runtime update'
+    $env:INSTALL_FORCE = '1'
+    $out = InstallFrom 'rt' $rtDir
+    Remove-Item Env:INSTALL_FORCE
+    Check ($out -match 'is already current') 'reinstalling an unchanged archive does not download it again'
+    Check ((Test-Path "$rtDir\lib\added\new.txt") -and @((Get-Content -Raw "$regDir\vi-rt.json" | ConvertFrom-Json).files | Where-Object { $_.kind -eq 'archive-file' }).Count -eq 4) 'unchanged archive keeps its file list'
+
+    $out = & "$rtDir\uninstall.cmd" -Id vi-rt -Yes 2>&1 | Out-String
+    Check ($out -match 'ViApp2 still needs ViRuntime') 'uninstalling the runtime warns about its dependents'
+    Start-Sleep -Seconds 5
+    $out = (& cmd.exe /c "`"$appDir\app2.cmd`" one 2>&1") | Out-String
+    Check (($out -match "runtime 'vi-rt' is not installed") -and $LASTEXITCODE -eq 1) 'launcher reports a missing runtime clearly'
+    Check (-not (Test-Path "$regDir\vi-rt.home")) 'pointer file removed with the runtime'
+    Check (-not (Test-Path $rtDir)) 'every unpacked file and folder removed with the runtime'
+    & "$appDir\uninstall.cmd" -Id vi-app2 -Yes 2>&1 | Out-Null
+    Start-Sleep -Seconds 5
+    Check (-not (Test-Path $appDir)) 'dependent uninstalled'
+
+    # ---- a signed native executable, with a snake-oil (self-signed) certificate -------------
+    Write-Host "signed native executable"
+    $cert = New-SelfSignedCertificate -Subject 'CN=ViSmoke Snake Oil' -Type CodeSigningCert -CertStoreLocation Cert:\CurrentUser\My
+    $sigDir = "$root\sig dir"
+    # a byte appended to each copy so neither matches the system catalog that vouches for the original
+    foreach ($n in 'signed', 'unsigned') {
+        Copy-Item "$env:windir\System32\where.exe" "$root\src\$n.exe"
+        [IO.File]::AppendAllText("$root\src\$n.exe", "x")
+    }
+    $signRes = Set-AuthenticodeSignature -FilePath "$root\src\signed.exe" -Certificate $cert
+    Check ($signRes.SignerCertificate -and $signRes.SignerCertificate.Thumbprint -eq $cert.Thumbprint) 'test exe signed with the snake-oil certificate'
+    function SigConfig([string]$exe, [string]$thumb, [string]$subject = 'CN=ViSmoke Snake Oil') {
+        $bin = @{ name = 'sapp'; source = "src/$exe"; signedBy = $subject }
+        if ($thumb) { $bin.signerThumbprint = $thumb }
+        @{ id = 'vi-sig'; name = 'ViSig'; version = '1.0.0'; repo = 'o/r'; tagFormat = '{version}'
+           windows = @{ installDir = $sigDir; binaries = @($bin) }
+        } | ConvertTo-Json -Depth 8 | Set-Content -Encoding ASCII "$root\sig.json"
+        BuildTo 'sig.json' 'sig' '1.0.0'
+    }
+    SigConfig 'unsigned.exe' $cert.Thumbprint
+    $out = InstallFrom 'sig' $sigDir
+    Check (($out -match 'is not signed') -and -not (Test-Path $sigDir)) 'an unsigned file is refused when the manifest says it is signed'
+    SigConfig 'signed.exe' ('A' * 40)
+    $out = InstallFrom 'sig' $sigDir
+    Check (($out -match 'different certificate') -and -not (Test-Path $sigDir)) 'a different certificate than the pinned one is refused'
+    SigConfig 'signed.exe' $cert.Thumbprint 'CN=Somebody Else'
+    $out = InstallFrom 'sig' $sigDir
+    Check (($out -match 'not CN=Somebody Else') -and -not (Test-Path $sigDir)) 'a different signer subject is refused'
+    SigConfig 'signed.exe' $null
+    $out = InstallFrom 'sig' $sigDir
+    Check (($out -match 'not trusted') -and -not (Test-Path $sigDir)) 'without a pin a self-signed certificate is refused'
+    SigConfig 'signed.exe' $cert.Thumbprint
+    $out = InstallFrom 'sig' $sigDir
+    Check ((Test-Path "$sigDir\signed.exe") -and ($out -match 'pinned certificate')) 'the pinned snake-oil certificate installs, with a warning that it is untrusted'
+    $sm = Get-Content -Raw "$root\site-sig\manifest.json" | ConvertFrom-Json
+    Check ($sm.versions[0].platforms.windows.binaries[0].signature.thumbprint -eq $cert.Thumbprint) 'manifest records the signer'
+    & "$sigDir\uninstall.cmd" -Id vi-sig -Yes 2>&1 | Out-Null
+    Start-Sleep -Seconds 5
+    Check (-not (Test-Path $sigDir)) 'signed app uninstalled'
 } finally {
+    if ($cert) { Remove-Item -LiteralPath "Cert:\CurrentUser\My\$($cert.Thumbprint)" -ErrorAction SilentlyContinue }
     Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
     Remove-Item Env:INSTALL_DIR, Env:INSTALL_REGISTRY_DIR -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
 }
 if ($fails -gt 0) { Write-Host "$fails check(s) failed" -ForegroundColor Red; exit 1 }
 Write-Host "all checks passed" -ForegroundColor Green
+
