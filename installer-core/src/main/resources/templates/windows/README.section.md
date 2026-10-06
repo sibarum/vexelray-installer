@@ -23,6 +23,7 @@ Set these in the same PowerShell window *before* the install command:
 | `$env:INSTALL_DIR = 'D:\Apps\{{NAME}}'` | install somewhere other than `{{INSTALL_DIR}}` |
 | `$env:INSTALL_NO_SHORTCUTS = '1'` | skip the desktop / Start menu shortcuts |
 | `$env:INSTALL_NO_PATH = '1'` | do not add anything to your user PATH |
+| `$env:INSTALL_NO_ASSOCIATIONS = '1'` | do not register {{NAME}} to open any file types |
 | `$env:INSTALL_FORCE = '1'` | reinstall even if this version is already installed |
 
 ### What gets installed
@@ -59,7 +60,7 @@ Use **Settings > Apps > {{NAME}} > Uninstall**, or:
 ```
 
 The uninstaller reads the install manifests in `{{REGISTRY_DIR}}`, so it removes exactly
-what was installed - files, shortcuts, PATH entries and the Apps entry. Files you added to
+what was installed - files, shortcuts, PATH entries, file types and the Apps entry. Files you added to
 the install folder are left alone. `uninstall.cmd -List` shows every install it knows about
 and `-All` removes them all.
 

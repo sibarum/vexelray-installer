@@ -18,7 +18,8 @@
         "name": "myapp",
         "source": "target/myapp.exe",
         "addToPath": true,
-        "shortcuts": { "desktop": true, "startMenu": true, "label": "MyApp" }
+        "shortcuts": { "desktop": true, "startMenu": true, "label": "MyApp" },
+        "fileAssociations": [ { "extension": ".myapp", "description": "MyApp Project" } ]
       },
       {
         "name": "myapp-tool",

@@ -26,6 +26,11 @@ public final class BinaryConfig {
      * more) that is converted. Shipped next to the binary. Native exes fall back to their own icon.
      */
     public String icon;
+    /**
+     * Extensions this binary opens ({@code "%1"} is passed as the last argument). Uses {@code icon} for the
+     * file type, or a native exe's own icon. Not for archives.
+     */
+    public java.util.List<FileAssociation> fileAssociations;
     /** Minimum Java major version, for jars. */
     public Integer javaMin;
     /** JVM options placed before {@code -jar} in the launcher and the shortcut. Jars only. */

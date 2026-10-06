@@ -7,10 +7,11 @@
 #   INSTALL_DIR=C:\some\dir  install somewhere other than the default
 #   INSTALL_NO_SHORTCUTS=1   skip the desktop / Start menu shortcuts
 #   INSTALL_NO_PATH=1        do not add anything to the user PATH
+#   INSTALL_NO_ASSOCIATIONS=1  do not register file types
 #   INSTALL_FORCE=1          reinstall even if this version is already installed
 #
 # The same options are accepted as arguments when the script is run from a file:
-#   -Version 1.2.3  -Dir C:\some\dir  -NoShortcuts  -NoPath  -Force
+#   -Version 1.2.3  -Dir C:\some\dir  -NoShortcuts  -NoPath  -NoAssociations  -Force
 
 $InstallerCfg = '{{CONFIG_JSON}}' | ConvertFrom-Json
 
@@ -81,6 +82,74 @@ function ViPathRemove([string]$dir) {
     $parts = @((ViUserPathGet) -split ';')
     $keep = @($parts | Where-Object { -not $_ -or (ViPathNorm $_) -ne (ViPathNorm $dir) })
     if ($keep.Count -ne $parts.Count) { ViUserPathSet ($keep -join ';') }
+}
+
+# ---- file associations (HKCU\Software\Classes) ------------------------------------------
+
+function ViNotifyAssoc {
+    try {
+        if (-not ('ViWin.ViShell' -as [type])) {
+            Add-Type -Namespace ViWin -Name ViShell -MemberDefinition '[DllImport("shell32.dll")] public static extern void SHChangeNotify(int wEventId, uint uFlags, IntPtr dwItem1, IntPtr dwItem2);'
+        }
+        [ViWin.ViShell]::SHChangeNotify(0x08000000, 0, [IntPtr]::Zero, [IntPtr]::Zero)
+    } catch { }
+}
+
+# Writes the ProgID and lists it under the extension's OpenWithProgids ("Open with"). It becomes the
+# extension's default only when neither the user's nor the machine's classes name one already; the
+# record keeps whether it did, so removal clears only what this install set.
+function ViAssocAdd($fa, [string]$command, [string]$icon) {
+    $classes = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Software\Classes')
+    try {
+        $pk = $classes.CreateSubKey($fa.progId)
+        try {
+            $pk.SetValue('', [string]$fa.description)
+            if ($icon) { $ik = $pk.CreateSubKey('DefaultIcon'); $ik.SetValue('', "$icon,0"); $ik.Close() }
+            else { $pk.DeleteSubKeyTree('DefaultIcon', $false) }
+            $ck = $pk.CreateSubKey('shell\open\command'); $ck.SetValue('', $command); $ck.Close()
+        } finally { $pk.Close() }
+        $ek = $classes.CreateSubKey($fa.extension)
+        try {
+            $ow = $ek.CreateSubKey('OpenWithProgids'); $ow.SetValue($fa.progId, ''); $ow.Close()
+            $cur = [string]$ek.GetValue('')
+            $isDefault = $cur -eq $fa.progId
+            if (-not $cur) {
+                $taken = $false
+                $mk = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey("Software\Classes\$($fa.extension)")
+                if ($mk) { try { $taken = [bool]$mk.GetValue('') } finally { $mk.Close() } }
+                if (-not $taken) { $ek.SetValue('', $fa.progId); $isDefault = $true }
+            }
+            $ctype = $null
+            if ($isDefault -and $fa.contentType) {
+                $have = [string]$ek.GetValue('Content Type')
+                if (-not $have) { $ek.SetValue('Content Type', [string]$fa.contentType) }
+                if (-not $have -or $have -eq $fa.contentType) { $ctype = [string]$fa.contentType }
+            }
+        } finally { $ek.Close() }
+    } finally { $classes.Close() }
+    [ordered]@{ extension = $fa.extension; progId = $fa.progId; isDefault = $isDefault; contentType = $ctype }
+}
+
+# Undoes ViAssocAdd for one install-record entry; leaves anything another program put on the extension.
+function ViAssocRemove($a) {
+    $classes = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Classes', $true)
+    if (-not $classes) { return }
+    try {
+        $classes.DeleteSubKeyTree($a.progId, $false)
+        $ek = $classes.OpenSubKey($a.extension, $true)
+        if (-not $ek) { return }
+        try {
+            $ow = $ek.OpenSubKey('OpenWithProgids', $true)
+            if ($ow) {
+                try { $ow.DeleteValue($a.progId, $false); $owEmpty = $ow.ValueCount -eq 0 -and $ow.SubKeyCount -eq 0 } finally { $ow.Close() }
+                if ($owEmpty) { $ek.DeleteSubKeyTree('OpenWithProgids', $false) }
+            }
+            if ([string]$ek.GetValue('') -eq $a.progId) { $ek.DeleteValue('', $false) }
+            if ($a.contentType -and [string]$ek.GetValue('Content Type') -eq $a.contentType) { $ek.DeleteValue('Content Type', $false) }
+            $extEmpty = $ek.ValueCount -eq 0 -and $ek.SubKeyCount -eq 0
+        } finally { $ek.Close() }
+        if ($extEmpty) { $classes.DeleteSubKeyTree($a.extension, $false) }
+    } finally { $classes.Close() }
 }
 
 # ---- versions ---------------------------------------------------------------------------
@@ -193,6 +262,18 @@ function ViJarLauncher($b, [string]$jarName) {
     return "@echo off`r`njava$jvm -jar `"%~dp0$jarName`" %*`r`n"
 }
 
+# javaw.exe for a jar's windowed start (shortcuts, file associations): its runtime install's, or the one
+# on PATH / JAVA_HOME. $null means start it through the .cmd launcher instead.
+function ViJavaw($b) {
+    if (-not $b.runtime) { return (ViFindJava 'javaw') }
+    $rt = ViReadRecord $b.runtime
+    if ($rt) {
+        $cand = Join-Path $rt.installDir 'bin\javaw.exe'
+        if (Test-Path -LiteralPath $cand) { return $cand }
+    }
+    return $null
+}
+
 function ViShortcut([string]$lnk, [string]$target, [string]$arguments, [string]$workDir, [string]$desc, [string]$icon) {
     ViEnsureDir (Split-Path $lnk -Parent)
     $s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
@@ -207,7 +288,7 @@ function ViShortcut([string]$lnk, [string]$target, [string]$arguments, [string]$
 # ---- install ---------------------------------------------------------------------------
 
 function ViInvokeInstall {
-    param([string]$Version, [string]$Dir, [switch]$NoShortcuts, [switch]$NoPath, [switch]$Force)
+    param([string]$Version, [string]$Dir, [switch]$NoShortcuts, [switch]$NoPath, [switch]$NoAssociations, [switch]$Force)
     $ErrorActionPreference = 'Stop'
     $ProgressPreference = 'SilentlyContinue'
     $id = $InstallerCfg.id
@@ -401,16 +482,7 @@ function ViInvokeInstall {
                 $label = if ($sc.label) { $sc.label } else { $s.Bin.name }
                 $target = $s.Target; $sargs = ''
                 if ($s.Bin.kind -eq 'jar') {
-                    $javaw = $null
-                    if ($sc.gui) {
-                        if ($s.Bin.runtime) {
-                            $rt = ViReadRecord $s.Bin.runtime
-                            if ($rt) {
-                                $cand = Join-Path $rt.installDir 'bin\javaw.exe'
-                                if (Test-Path -LiteralPath $cand) { $javaw = $cand }
-                            }
-                        } else { $javaw = ViFindJava 'javaw' }
-                    }
+                    $javaw = if ($sc.gui) { ViJavaw $s.Bin } else { $null }
                     if ($javaw) {
                         $target = $javaw
                         $sargs = (@((ViJvmArgs $s.Bin), "-jar `"$($s.Target)`"") | Where-Object { $_ }) -join ' '
@@ -430,7 +502,30 @@ function ViInvokeInstall {
             }
         }
 
-        # 4. PATH
+        # 4. file associations: the binary gets the file as its last argument
+        $associations = @()
+        $skipAssoc = $NoAssociations -or [bool]$env:INSTALL_NO_ASSOCIATIONS
+        if (-not $skipAssoc) {
+            foreach ($s in $staged) {
+                if (-not $s.Bin.fileAssociations) { continue }
+                $cmd = "`"$($s.Target)`" `"%1`""
+                if ($s.Bin.kind -eq 'jar') {
+                    $javaw = if (@($s.Bin.fileAssociations)[0].gui) { ViJavaw $s.Bin } else { $null }
+                    if ($javaw) { $cmd = ((@("`"$javaw`"", (ViJvmArgs $s.Bin), "-jar `"$($s.Target)`" `"%1`"") | Where-Object { $_ }) -join ' ') }
+                    else { $cmd = "`"$(ViExpand $s.Bin.launcher.Replace('{installDir}', $installDir))`" `"%1`"" }
+                }
+                $icon = if ($s.Icon) { $s.Icon.Target } elseif ($s.Bin.kind -eq 'native') { $s.Target } else { $null }
+                foreach ($fa in @($s.Bin.fileAssociations)) {
+                    try {
+                        $a = ViAssocAdd $fa $cmd $icon
+                        $associations += $a
+                        ViInfo ("Opens {0} files{1}" -f $fa.extension, $(if ($a.isDefault) { ' (default)' } else { ' (listed under Open with)' }))
+                    } catch { Write-Warning "Could not register $($fa.extension): $($_.Exception.Message)" }
+                }
+            }
+        }
+
+        # 5. PATH
         $pathEntries = @()
         $skipPath = $NoPath -or [bool]$env:INSTALL_NO_PATH
         if (-not $skipPath) {
@@ -448,7 +543,7 @@ function ViInvokeInstall {
             }
         }
 
-        # 5. clean up whatever the previous install had that this one does not
+        # 6. clean up whatever the previous install had that this one does not
         if ($old) {
             $newPaths = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
             foreach ($nf in $files) { [void]$newPaths.Add([string]$nf.path) }
@@ -471,9 +566,16 @@ function ViInvokeInstall {
             foreach ($d in @($old.pathEntries)) {
                 if ($d -and ($pathEntries -notcontains $d)) { ViPathRemove $d }
             }
+            $keptProgIds = @($associations | ForEach-Object { $_.progId })
+            foreach ($a in @($old.fileAssociations)) {
+                if ($a -and $a.progId -and ($keptProgIds -notcontains $a.progId)) {
+                    try { ViAssocRemove $a } catch { Write-Warning "Could not unregister $($a.extension): $($_.Exception.Message)" }
+                }
+            }
         }
+        if ($associations.Count -gt 0 -or @($old.fileAssociations | Where-Object { $_ }).Count -gt 0) { ViNotifyAssoc }
 
-        # 6. install manifest + uninstall registration
+        # 7. install manifest + uninstall registration
         # `commands` is how other installed programs find and start these binaries without
         # relying on PATH: name -> absolute path to run (the .cmd launcher for a jar).
         $commands = [ordered]@{}
@@ -508,6 +610,7 @@ function ViInvokeInstall {
             files         = $files
             shortcuts     = $shortcuts
             pathEntries   = $pathEntries
+            fileAssociations = $associations
             registryKeys  = @($uninstallKey)
         }
         $json = $record | ConvertTo-Json -Depth 10
@@ -558,6 +661,7 @@ for ($ViI = 0; $ViI -lt $args.Count; $ViI++) {
         '^-Dir$' { $ViI++; $ViArgs.Dir = $args[$ViI] }
         '^-NoShortcuts$' { $ViArgs.NoShortcuts = $true }
         '^-NoPath$' { $ViArgs.NoPath = $true }
+        '^-NoAssociations$' { $ViArgs.NoAssociations = $true }
         '^-Force$' { $ViArgs.Force = $true }
         default { Write-Warning "Ignoring unknown argument: $($args[$ViI])" }
     }

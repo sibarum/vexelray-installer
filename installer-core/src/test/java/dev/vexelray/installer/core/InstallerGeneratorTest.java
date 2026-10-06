@@ -232,6 +232,60 @@ class InstallerGeneratorTest {
         return new InstallerGenerator().generate(r);
     }
 
+    static FileAssociation assoc(String ext) {
+        FileAssociation fa = new FileAssociation();
+        fa.extension = ext;
+        return fa;
+    }
+
+    @Test
+    void fileAssociationsLandInTheManifestAndReadme() throws IOException {
+        runWith(c -> {
+            FileAssociation proj = assoc("VXR");
+            proj.description = "MyApp Project";
+            proj.contentType = "application/x-vexelray";
+            c.windows.binaries.get(0).fileAssociations = java.util.List.of(proj);
+            c.windows.binaries.get(1).fileAssociations = java.util.List.of(assoc(".vxt"));
+        });
+        JsonNode bins = manifest().path("versions").get(0).path("platforms").path("windows").path("binaries");
+        JsonNode exe = bins.get(0).path("fileAssociations").get(0);
+        assertEquals(".vxr", exe.path("extension").asText());
+        assertEquals("myapp.vxr", exe.path("progId").asText());
+        assertEquals("MyApp Project", exe.path("description").asText());
+        assertEquals("application/x-vexelray", exe.path("contentType").asText());
+        assertTrue(exe.path("gui").isMissingNode());
+        JsonNode jar = bins.get(1).path("fileAssociations").get(0);
+        assertEquals("MyApp VXT file", jar.path("description").asText());
+        assertTrue(jar.path("gui").asBoolean());
+        assertTrue(Files.readString(out.resolve("README.md")).contains("`.vxr`, `.vxt`"));
+    }
+
+    @Test
+    void fileAssociationsAreValidated() throws IOException {
+        java.util.function.Consumer<java.util.function.Consumer<InstallerConfig>> bad =
+                tweak -> assertThrows(InstallerException.class, () -> runWith(tweak));
+        bad.accept(c -> c.windows.binaries.get(0).fileAssociations = java.util.List.of(assoc("exe")));
+        bad.accept(c -> c.windows.binaries.get(0).fileAssociations = java.util.List.of(assoc(".v x")));
+        bad.accept(c -> c.windows.binaries.get(0).fileAssociations = java.util.List.of(assoc("")));
+        bad.accept(c -> c.windows.binaries.get(0).fileAssociations = java.util.List.of(assoc("vxr"), assoc(".VXR")));
+        bad.accept(c -> {
+            c.windows.binaries.get(0).fileAssociations = java.util.List.of(assoc("vxr"));
+            c.windows.binaries.get(1).fileAssociations = java.util.List.of(assoc("vxr"));
+        });
+        bad.accept(c -> {
+            FileAssociation fa = assoc("vxr");
+            fa.contentType = "not a mime";
+            c.windows.binaries.get(0).fileAssociations = java.util.List.of(fa);
+        });
+        zip("rt.zip", "bin/java.exe");
+        bad.accept(c -> {
+            BinaryConfig rt = new BinaryConfig();
+            rt.source = "src/rt.zip";
+            rt.fileAssociations = java.util.List.of(assoc("vxr"));
+            c.windows.binaries.add(rt);
+        });
+    }
+
     @Test
     void runtimeJvmArgsAndRequiresLandInTheManifest() throws IOException {
         runWith(c -> {

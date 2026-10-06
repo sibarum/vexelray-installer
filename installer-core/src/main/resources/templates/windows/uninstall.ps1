@@ -51,6 +51,38 @@ function ViPathRemove([string]$dir) {
     if ($keep.Count -ne $parts.Count) { ViUserPathSet ($keep -join ';') }
 }
 
+function ViNotifyAssoc {
+    try {
+        if (-not ('ViWin.ViShell' -as [type])) {
+            Add-Type -Namespace ViWin -Name ViShell -MemberDefinition '[DllImport("shell32.dll")] public static extern void SHChangeNotify(int wEventId, uint uFlags, IntPtr dwItem1, IntPtr dwItem2);'
+        }
+        [ViWin.ViShell]::SHChangeNotify(0x08000000, 0, [IntPtr]::Zero, [IntPtr]::Zero)
+    } catch { }
+}
+
+# Undoes the installer's ViAssocAdd for one install-record entry; leaves anything another program put
+# on the extension.
+function ViAssocRemove($a) {
+    $classes = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Classes', $true)
+    if (-not $classes) { return }
+    try {
+        $classes.DeleteSubKeyTree($a.progId, $false)
+        $ek = $classes.OpenSubKey($a.extension, $true)
+        if (-not $ek) { return }
+        try {
+            $ow = $ek.OpenSubKey('OpenWithProgids', $true)
+            if ($ow) {
+                try { $ow.DeleteValue($a.progId, $false); $owEmpty = $ow.ValueCount -eq 0 -and $ow.SubKeyCount -eq 0 } finally { $ow.Close() }
+                if ($owEmpty) { $ek.DeleteSubKeyTree('OpenWithProgids', $false) }
+            }
+            if ([string]$ek.GetValue('') -eq $a.progId) { $ek.DeleteValue('', $false) }
+            if ($a.contentType -and [string]$ek.GetValue('Content Type') -eq $a.contentType) { $ek.DeleteValue('Content Type', $false) }
+            $extEmpty = $ek.ValueCount -eq 0 -and $ek.SubKeyCount -eq 0
+        } finally { $ek.Close() }
+        if ($extEmpty) { $classes.DeleteSubKeyTree($a.extension, $false) }
+    } finally { $classes.Close() }
+}
+
 function ViReadRecords {
     $dir = ViRegistryDir
     $out = @()
@@ -84,6 +116,11 @@ function ViRemoveOne($rec) {
         if ($l -and (Test-Path -LiteralPath $l)) { Remove-Item -Force -LiteralPath $l -ErrorAction SilentlyContinue }
     }
     foreach ($d in @($rec.pathEntries)) { if ($d) { ViPathRemove $d } }
+    $assocs = @($rec.fileAssociations | Where-Object { $_ -and $_.progId })
+    foreach ($a in $assocs) {
+        try { ViAssocRemove $a } catch { Write-Warning "Could not unregister $($a.extension): $($_.Exception.Message)" }
+    }
+    if ($assocs.Count -gt 0) { ViNotifyAssoc }
     foreach ($k in @($rec.registryKeys)) {
         if ($k -and (Test-Path -LiteralPath $k)) { Remove-Item -Recurse -Force -LiteralPath $k -ErrorAction SilentlyContinue }
     }

@@ -1,8 +1,8 @@
 #requires -Version 5.1
 # End-to-end test against a local web server: build 1.0.0, install it through `irm | iex`,
 # build 1.1.0, update, uninstall. Touches only a temp dir, a temp registry dir, the current
-# user's Desktop/Start menu (shortcuts are removed again) and HKCU (Uninstall key + PATH,
-# both restored). Run:  powershell -File tests\smoke.ps1
+# user's Desktop/Start menu (shortcuts are removed again) and HKCU (Uninstall key, PATH and
+# .vismoke* file types, all restored). Run:  powershell -File tests\smoke.ps1
 $ErrorActionPreference = 'Continue'
 $repo = Split-Path $PSScriptRoot -Parent
 $root = Join-Path ([IO.Path]::GetTempPath()) ("vi-smoke-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -10,6 +10,16 @@ $port = Get-Random -Minimum 20000 -Maximum 40000
 $base = "http://127.0.0.1:$port"
 New-Item -ItemType Directory -Force -Path "$root\src", "$root\site", "$root\assets" | Out-Null
 $fails = 0
+function ClassKey([string]$sub) {
+    $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Software\Classes\$sub")
+    if ($k) { $k.Close(); return $true }
+    return $false
+}
+function ClassValue([string]$sub, [string]$name = '') {
+    $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Software\Classes\$sub")
+    if (-not $k) { return $null }
+    try { $k.GetValue($name) } finally { $k.Close() }
+}
 function Check([bool]$ok, [string]$what) {
     if ($ok) { Write-Host "  ok   $what" -ForegroundColor Green } else { Write-Host "  FAIL $what" -ForegroundColor Red; $script:fails++ }
 }
@@ -36,14 +46,23 @@ try {
     Start-Sleep -Seconds 2
     Copy-Item "$env:windir\System32\where.exe" "$root\src\app.exe"
     [IO.File]::WriteAllText("$root\src\tool.jar", "not really a jar v1")
-    @{
-        id = 'vi-smoke'; name = 'ViSmoke'; publisher = 'Test'; description = 'smoke'; version = '1.0.0'
-        repo = 'o/r'; tagFormat = '{version}'
-        windows = @{ installDir = "$installDir"; binaries = @(
-            @{ name = 'app'; source = 'src/app.exe'; addToPath = $true; shortcuts = @{ desktop = $true; startMenu = $true; label = 'ViSmoke' } },
-            @{ name = 'tool'; source = 'src/tool.jar'; javaMin = 17; shortcuts = @{ desktop = $true; label = 'ViSmoke Tool' } }
-        ) }
-    } | ConvertTo-Json -Depth 8 | Set-Content -Encoding ASCII "$root\installer.json"
+    function SmokeConfig([bool]$toolAssoc) {
+        $tool = @{ name = 'tool'; source = 'src/tool.jar'; javaMin = 17; shortcuts = @{ desktop = $true; label = 'ViSmoke Tool' } }
+        if ($toolAssoc) { $tool.fileAssociations = @(@{ extension = 'vismokej' }) }
+        @{
+            id = 'vi-smoke'; name = 'ViSmoke'; publisher = 'Test'; description = 'smoke'; version = '1.0.0'
+            repo = 'o/r'; tagFormat = '{version}'
+            windows = @{ installDir = "$installDir"; binaries = @(
+                @{ name = 'app'; source = 'src/app.exe'; addToPath = $true; shortcuts = @{ desktop = $true; startMenu = $true; label = 'ViSmoke' }
+                   fileAssociations = @(@{ extension = '.vismoke'; description = 'ViSmoke Project'; contentType = 'text/x-vismoke' }, @{ extension = '.vismoketaken' }) },
+                $tool
+            ) }
+        } | ConvertTo-Json -Depth 8 | Set-Content -Encoding ASCII "$root\installer.json"
+    }
+    SmokeConfig $true
+    # an extension another program already owns: we may only join its Open with list
+    New-Item -Path 'HKCU:\Software\Classes\.vismoketaken' -Force | Out-Null
+    Set-Item -Path 'HKCU:\Software\Classes\.vismoketaken' -Value 'ViSmoke.Other'
 
     Write-Host "build 1.0.0"; Build '1.0.0'
     $m = Get-Content -Raw "$root\site\manifest.json" | ConvertFrom-Json
@@ -66,6 +85,14 @@ try {
     Check ((Test-Path "$desktop\ViSmoke.lnk") -and (Test-Path "$desktop\ViSmoke Tool.lnk")) 'desktop shortcuts'
     Check (Test-Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\vi-smoke") 'Apps & features entry'
     Check (([Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment').GetValue('Path', '', 'DoNotExpandEnvironmentNames')) -like "*$installDir*") 'PATH entry added'
+    Check ((ClassValue 'vi-smoke.vismoke\shell\open\command') -eq "`"$installDir\app.exe`" `"%1`"") 'ProgID open command runs the exe with the file'
+    Check ((ClassValue 'vi-smoke.vismoke\DefaultIcon') -eq "$installDir\app.exe,0") 'ProgID uses the exe icon'
+    Check ((ClassValue '.vismoke') -eq 'vi-smoke.vismoke' -and (ClassValue '.vismoke' 'Content Type') -eq 'text/x-vismoke') 'unclaimed extension becomes ours, with its content type'
+    Check ($null -ne (ClassValue '.vismoke\OpenWithProgids' 'vi-smoke.vismoke')) 'listed under Open with'
+    Check ((ClassValue '.vismoketaken') -eq 'ViSmoke.Other' -and $null -ne (ClassValue '.vismoketaken\OpenWithProgids' 'vi-smoke.vismoketaken')) 'claimed extension keeps its default, we only join Open with'
+    Check ((ClassValue 'vi-smoke.vismokej\shell\open\command') -match 'tool\.(cmd|jar)" "%1"$') 'jar association opens through javaw or the launcher'
+    $fa = @($rec0.fileAssociations)
+    Check ($fa.Count -eq 3 -and ($fa | Where-Object { $_.extension -eq '.vismoke' }).isDefault -and -not ($fa | Where-Object { $_.extension -eq '.vismoketaken' }).isDefault) 'record lists associations and which are defaults'
 
     Write-Host "reinstall is a no-op"
     $out = powershell -NoProfile -ExecutionPolicy Bypass -File "$root\site\install.ps1" 2>&1 | Out-String
@@ -74,6 +101,7 @@ try {
     Write-Host "build 1.1.0, update"
     Copy-Item -Force "$env:windir\System32\where.exe" "$root\src\app.exe"
     [IO.File]::AppendAllText("$root\src\app.exe", "x")
+    SmokeConfig $false
     Build '1.1.0'
     $m = Get-Content -Raw "$root\site\manifest.json" | ConvertFrom-Json
     Check ($m.latest -eq '1.1.0' -and @($m.versions).Count -eq 2) 'manifest keeps both versions in history'
@@ -84,6 +112,8 @@ try {
     $rec = Get-Content -Raw "$regDir\vi-smoke.json" | ConvertFrom-Json
     Check ($rec.version -eq '1.1.0') 'record now at 1.1.0'
     Check ((Get-Item "$installDir\app.exe").Length -eq ((Get-Item "$env:windir\System32\where.exe").Length + 1)) 'app.exe replaced'
+    Check (-not (ClassKey 'vi-smoke.vismokej') -and -not (ClassKey '.vismokej')) 'an association dropped by the update is unregistered'
+    Check ((ClassValue '.vismoke') -eq 'vi-smoke.vismoke') 'kept association is still the default after the update'
     $out = & "$installDir\update.cmd" -Yes 2>&1 | Out-String
     Check ($out -match 'up to date') 'update again says up to date'
 
@@ -98,6 +128,8 @@ try {
     Check (-not (Test-Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\vi-smoke")) 'Apps entry gone'
     $pathAfter = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment').GetValue('Path', '', 'DoNotExpandEnvironmentNames')
     Check ($pathAfter -eq $pathBefore) 'user PATH restored exactly'
+    Check (-not (ClassKey 'vi-smoke.vismoke') -and -not (ClassKey '.vismoke') -and -not (ClassKey 'vi-smoke.vismoketaken')) 'our file types are gone'
+    Check ((ClassValue '.vismoketaken') -eq 'ViSmoke.Other' -and -not (ClassKey '.vismoketaken\OpenWithProgids')) "another program's extension is left as it was"
 
     # ---- two installs: a runtime, and an app that needs it ---------------------------------
     Write-Host "runtime + dependent app"
@@ -233,6 +265,9 @@ try {
     if ($cert) { Remove-Item -LiteralPath "Cert:\CurrentUser\My\$($cert.Thumbprint)" -ErrorAction SilentlyContinue }
     Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
     Remove-Item Env:INSTALL_DIR, Env:INSTALL_REGISTRY_DIR -ErrorAction SilentlyContinue
+    foreach ($k in '.vismoke', '.vismoketaken', '.vismokej', 'vi-smoke.vismoke', 'vi-smoke.vismoketaken', 'vi-smoke.vismokej') {
+        Remove-Item -Recurse -Force -LiteralPath "HKCU:\Software\Classes\$k" -ErrorAction SilentlyContinue
+    }
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
 }
 if ($fails -gt 0) { Write-Host "$fails check(s) failed" -ForegroundColor Red; exit 1 }

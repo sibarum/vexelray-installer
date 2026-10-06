@@ -103,6 +103,20 @@ public final class WindowsTarget implements PlatformTarget {
                 s.put("label", InstallerConfig.blank(sc.label) ? b.name() : sc.label);
                 s.put("gui", sc.gui == null ? b.isJar() : sc.gui);
             }
+            if (bc.fileAssociations != null && !bc.fileAssociations.isEmpty()) {
+                ArrayNode fas = e.putArray("fileAssociations");
+                for (FileAssociation fa : bc.fileAssociations) {
+                    String ext = InstallerGenerator.normalizeExtension(fa.extension);
+                    ObjectNode n = fas.addObject();
+                    n.put("extension", ext);
+                    n.put("progId", c.id + ext);
+                    n.put("description", InstallerConfig.blank(fa.description)
+                            ? c.name + " " + ext.substring(1).toUpperCase(Locale.ROOT) + " file" : fa.description.trim());
+                    if (!InstallerConfig.blank(fa.contentType)) n.put("contentType", fa.contentType);
+                    // jars open through javaw (no console) like their shortcuts, unless shortcuts say gui=false
+                    if (b.isJar()) n.put("gui", sc == null || sc.gui == null || sc.gui);
+                }
+            }
             binaries.add(e);
         }
         if (javaMin >= 0 || !needs.isEmpty()) {
@@ -130,7 +144,11 @@ public final class WindowsTarget implements PlatformTarget {
         List<ResolvedBinary> bins = rc.binaries();
         boolean shortcuts = false, onPath = false;
         int javaMin = -1;
+        List<String> extensions = new ArrayList<>();
         for (ResolvedBinary b : bins) {
+            if (b.config().fileAssociations != null)
+                for (FileAssociation fa : b.config().fileAssociations)
+                    extensions.add("`" + InstallerGenerator.normalizeExtension(fa.extension) + "`");
             shortcuts |= b.config().shortcuts != null;
             onPath |= Boolean.TRUE.equals(b.config().addToPath);
             if (b.isJar() && InstallerConfig.blank(b.config().runtime))
@@ -143,6 +161,8 @@ public final class WindowsTarget implements PlatformTarget {
         what.add("- unblocks them and makes sure they are executable");
         if (shortcuts) what.add("- creates desktop / Start menu shortcuts");
         if (onPath) what.add("- adds the install folder to your user PATH");
+        if (!extensions.isEmpty()) what.add("- registers itself to open " + String.join(", ", extensions)
+                + " files (under Open with; the default only where no other program has claimed the type)");
         what.add("- writes an install manifest listing everything it installed and where");
         what.add("- adds an uninstaller and an updater next to the binaries, and an entry in Settings > Apps");
 
