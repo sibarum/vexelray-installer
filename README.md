@@ -128,7 +128,10 @@ config file.
   the signature adds who published it.
 - **Install manifest**: written to `<installDir>\install-manifest.json` and to
   `<registryDir>\<id>.json`: every file with path/kind/version/hash, shortcuts, PATH entries
-  and registry keys.
+  and registry keys. `commands.<name>.path` is how separately installed apps find and start
+  each other: on the VexelRay stack, `vexelray-framework`'s `Apps.find(id)` / `Apps.spawn(id, args...)`
+  read it (honouring `INSTALL_REGISTRY_DIR`), which is how Vexplore opens a file in the Text Editor
+  and the editor opens a file in Vexplore.
 - **uninstall.ps1** (`uninstall.cmd`) scans `registryDir` for install manifests, so it finds
   every install (`-List`, `-Id`, `-All`, `-Yes`). It removes only what the manifest lists and
   leaves files the user added.
