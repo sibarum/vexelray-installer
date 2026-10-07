@@ -97,6 +97,37 @@ java -jar installer-core/target/installer-core-0.1.0-SNAPSHOT-cli.jar --config i
 [installer.example.json](installer.example.json). Relative `source` paths resolve against the
 config file.
 
+## Suites: one command for several applications
+
+Applications that ship together can share one install command and one page of instructions, while each stays
+an install of its own (its own folder, record, Apps entry, updater and uninstaller), published from its own
+repo exactly as above. A suite names its members by their `installer.json`:
+
+```json
+{
+  "id": "vexelray", "name": "VexelRay", "description": "...",
+  "repo": "owner/site-repo", "repoPath": "docs/install",
+  "members": [
+    { "config": "../vexplore/installer.json", "page": "../apps/vexplore.html" },
+    { "config": "../text-editor/installer.json" }
+  ]
+}
+```
+
+```
+java -jar installer-core/target/installer-core-0.1.0-SNAPSHOT-cli.jar --suite suite.json --out docs/install
+```
+
+writes `install.ps1` and `README.md` (the install page), and needs neither the artifacts nor the network.
+Commit both to `repo`/`repoPath`. The suite's `install.ps1` installs nothing itself: for each member, in the
+listed order, it fetches the member's published `manifest.json`, downloads the member's own `install.ps1`,
+refuses it unless it matches the SHA-256 the manifest records (`tools.install.ps1`), and runs it. A member
+whose manifest is not published yet is skipped and reported. `INSTALL_ONLY=a,b` limits the run to some
+members. `INSTALL_NO_SHORTCUTS`, `INSTALL_NO_PATH`, `INSTALL_NO_ASSOCIATIONS` and `INSTALL_FORCE` pass through to
+every member; `INSTALL_VERSION` and `INSTALL_DIR` name one application, so they are set aside. `page`
+(optional) links a member's name on the install page; `manifestUrl` (optional) overrides the URL derived from
+the member's `repo`, `branch` and `repoPath`.
+
 ## What the generated files do
 
 - **install.ps1** reads `manifest.json`, downloads each binary, verifies its SHA-256, then
@@ -159,4 +190,5 @@ and register it in `InstallerGenerator`'s default target list.
 mvn test                           # generator, versions, GitHub publisher (against a fake API)
 powershell -File tests\parse.ps1   # the PowerShell templates parse
 powershell -File tests\smoke.ps1   # build, install via irm|iex, update, uninstall against a local server
+powershell -File tests\suite-smoke.ps1   # a suite of three: INSTALL_ONLY, unpublished and tampered members
 ```

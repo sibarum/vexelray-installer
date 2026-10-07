@@ -61,7 +61,9 @@ try {
         & java -jar $cli.FullName --config "$root\$id.json" --version 0.1.0 --out "$root\site-$id" --assets "$root\assets-$id" `
             --base-url "$base/site-$id" --asset-base-url "$base/assets-$id" | Out-Null
         Check ($LASTEXITCODE -eq 0) "$id installer generated"
-        $out = powershell -NoProfile -ExecutionPolicy Bypass -Command "irm $base/site-$id/install.ps1 | iex" 2>&1 | Out-String
+        # Encoded: Windows PowerShell hands `-Command "irm ... | iex"` to iex a line at a time.
+        $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes("irm $base/site-$id/install.ps1 | iex"))
+        $out = powershell -NoProfile -ExecutionPolicy Bypass -OutputFormat Text -EncodedCommand $enc 2>&1 | Out-String
         $out -split "`n" | ForEach-Object { if ($_.Trim()) { Write-Host "    | $($_.TrimEnd())" } }
         $installed = "$root\inst\$id\$id.exe"
         Check (Test-Path -LiteralPath $installed) "$id installed"

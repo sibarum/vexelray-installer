@@ -70,7 +70,10 @@ try {
     Check ((Test-Path "$root\site\README.md") -and (Get-Content -Raw "$root\site\README.md") -match [regex]::Escape("irm $base/site/install.ps1 | iex")) 'README embeds the one-liner'
 
     Write-Host "install via irm | iex"
-    $out = powershell -NoProfile -ExecutionPolicy Bypass -Command "irm $base/site/install.ps1 | iex" 2>&1
+    # Encoded, because Windows PowerShell hands `-Command "irm ... | iex"` to iex a line at a time, which a
+    # person typing the line never sees.
+    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes("irm $base/site/install.ps1 | iex"))
+    $out = powershell -NoProfile -ExecutionPolicy Bypass -OutputFormat Text -EncodedCommand $enc 2>&1
     $out | ForEach-Object { Write-Host "    | $_" }
     Check (Test-Path "$installDir\app.exe") 'app.exe installed'
     Check (Test-Path "$installDir\tool.jar") 'tool.jar installed'

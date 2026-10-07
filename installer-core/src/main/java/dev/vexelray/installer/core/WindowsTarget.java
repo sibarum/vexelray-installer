@@ -30,11 +30,11 @@ public final class WindowsTarget implements PlatformTarget {
         return n;
     }
 
-    private static String registryDir(PlatformConfig p) {
+    static String registryDir(PlatformConfig p) {
         return InstallerConfig.blank(p.registryDir) ? DEFAULT_REGISTRY_DIR : p.registryDir;
     }
 
-    private static String installDir(InstallerConfig c, PlatformConfig p) {
+    static String installDir(InstallerConfig c, PlatformConfig p) {
         return (InstallerConfig.blank(p.installDir) ? DEFAULT_INSTALL_DIR : p.installDir).replace("{name}", c.name);
     }
 

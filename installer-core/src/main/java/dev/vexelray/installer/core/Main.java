@@ -11,6 +11,8 @@ import java.nio.file.Path;
  * java -jar installer-core-*-cli.jar --config installer.json [--version 1.2.0] [--out dist]
  *      [--assets build/release-assets] [--notes "..."] [--base-url URL] [--asset-base-url URL]
  *      [--publish]        (token from $GITHUB_TOKEN)
+ *
+ * java -jar installer-core-*-cli.jar --suite suite.json [--out dist] [--base-url URL]
  * </pre>
  */
 public final class Main {
@@ -28,10 +30,12 @@ public final class Main {
     static int run(String[] args) {
         String config = "installer.json", version = null, out = "dist", assets = "build/release-assets";
         String notes = "", baseUrl = null, assetBaseUrl = null;
+        String suite = null;
         boolean publish = false;
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "--config" -> config = value(args, ++i);
+                case "--suite" -> suite = value(args, ++i);
                 case "--version" -> version = value(args, ++i);
                 case "--out" -> out = value(args, ++i);
                 case "--assets" -> assets = value(args, ++i);
@@ -42,6 +46,7 @@ public final class Main {
                 default -> throw new InstallerException("unknown argument " + args[i]);
             }
         }
+        if (suite != null) return suite(Path.of(suite).toAbsolutePath(), Path.of(out).toAbsolutePath(), baseUrl);
         Path configPath = Path.of(config).toAbsolutePath();
         InstallerConfig cfg;
         try {
@@ -71,6 +76,20 @@ public final class Main {
                     + " to the release tagged '" + res.tag() + "' on " + res.releasesRepo() + " (or re-run with --publish)");
         }
         System.out.println("              then commit the generated files in " + req.outDir + " to " + cfg.repo);
+        return 0;
+    }
+
+    private static int suite(Path suitePath, Path out, String baseUrl) {
+        SuiteConfig s;
+        try {
+            s = Json.read(Files.readString(suitePath, StandardCharsets.UTF_8), SuiteConfig.class);
+        } catch (java.io.IOException e) {
+            throw new InstallerException("cannot read suite " + suitePath + ": " + e.getMessage(), e);
+        }
+        String command = new SuiteGenerator().generate(s, suitePath.getParent(), out, baseUrl);
+        System.out.println("Generated the " + s.name + " suite installer into " + out);
+        System.out.println("  one-liner:  " + command);
+        System.out.println("  next:       commit the generated files in " + out + " to " + s.repo);
         return 0;
     }
 

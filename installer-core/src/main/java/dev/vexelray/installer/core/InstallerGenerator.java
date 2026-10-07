@@ -65,15 +65,7 @@ public final class InstallerGenerator {
         version = Versions.strip(version);
         Versions.parse(version);
 
-        String baseUrl = r.baseUrl;
-        if (InstallerConfig.blank(baseUrl)) {
-            if (c.repo == null || !REPO.matcher(c.repo).matches())
-                throw new InstallerException("'repo' must look like owner/name (the GitHub repo the generated files are committed to)");
-            String path = c.repoPathTrimmed();
-            baseUrl = "https://raw.githubusercontent.com/" + c.repo + "/" + c.branchOrDefault()
-                    + (path.isEmpty() ? "" : "/" + path);
-        }
-        baseUrl = baseUrl.replaceAll("/+$", "");
+        String baseUrl = baseUrl(c.repo, c.branchOrDefault(), c.repoPathTrimmed(), r.baseUrl);
         String tag = c.tagFormatOrDefault().replace("{version}", version);
         String manifestUrl = baseUrl + "/manifest.json";
 
@@ -219,6 +211,27 @@ public final class InstallerGenerator {
         return new GenerationResult(version, latest, tag, c.releasesRepoOrRepo(), manifestUrl, firstCommand,
                 assets, written, r.notes == null ? "" : r.notes, Versions.isPre(version));
     }
+
+    /**
+     * The public URL of the folder the generated files are committed to: {@code override} when given,
+     * otherwise that folder on raw.githubusercontent.com. Shared with {@link SuiteGenerator}, which has to
+     * arrive at the same manifest URL an application's own run wrote into its scripts.
+     */
+    static String baseUrl(String repo, String branch, String repoPath, String override) {
+        String url = override;
+        if (InstallerConfig.blank(url)) {
+            if (repo == null || !REPO.matcher(repo).matches())
+                throw new InstallerException("'repo' must look like owner/name (the GitHub repo the generated files are committed to)");
+            url = "https://raw.githubusercontent.com/" + repo + "/" + branch + (repoPath.isEmpty() ? "" : "/" + repoPath);
+        }
+        return url.replaceAll("/+$", "");
+    }
+
+    static boolean validId(String id) { return id != null && ID.matcher(id).matches(); }
+
+    static void writeAscii(Path path, String text) throws IOException { writeText(path, text, true); }
+
+    static void writeUtf8(Path path, String text) throws IOException { writeText(path, text, false); }
 
     private ResolvedBinary stage(InstallerConfig c, BinaryConfig b, String version, String tag,
                                  GenerationRequest r, Path assetOut) throws IOException {
