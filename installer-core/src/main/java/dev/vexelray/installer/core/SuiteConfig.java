@@ -24,6 +24,9 @@ public final class SuiteConfig {
     /** Installed in this order, so a member another one {@code requires} goes first. */
     public List<Member> members = new ArrayList<>();
 
+    /** The landing page written by {@code --site}; not needed for the install script and README. */
+    public Site site;
+
     public static final class Member {
         /** Path to the member's installer.json, relative to the suite config. */
         public String config;
@@ -31,6 +34,36 @@ public final class SuiteConfig {
         public String page;
         /** Overrides the manifest URL derived from the member's own repo (testing, or other hosting). */
         public String manifestUrl;
+        /** Optional screenshot for the landing page, relative to the suite config. */
+        public String image;
+        /** What the screenshot shows, for readers who can't see it. */
+        public String imageAlt;
+    }
+
+    /**
+     * A landing page served from its own address (GitHub Pages), with a copy of the install script beside it
+     * so the command is short. The members' manifests stay where their own runs published them.
+     */
+    public static final class Site {
+        /** Where the page is served, for example {@code https://owner.github.io}; the command uses it. */
+        public String url;
+        /** One line under the name; the suite's {@code description} goes under the command. */
+        public String tagline;
+        /** A short label above the name, such as the release and its status. */
+        public String badge;
+        /** What a computer needs to run the members, said once under the command. */
+        public String requirements;
+        /** Where to report problems; the page asks for feedback when this is set. */
+        public String feedbackUrl;
+        /** CSS colour of the copy button and links. */
+        public String accentColor;
+        /** Links in the page header, in order. */
+        public List<Link> links = new ArrayList<>();
+    }
+
+    public static final class Link {
+        public String label;
+        public String url;
     }
 
     public String branchOrDefault() { return InstallerConfig.blank(branch) ? "main" : branch; }

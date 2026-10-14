@@ -122,4 +122,123 @@ class SuiteGeneratorTest {
         InstallerException e = assertThrows(InstallerException.class, () -> generate(suite()));
         assertTrue(e.getMessage().contains("windows"), e.getMessage());
     }
+
+    // --- The landing page --------------------------------------------------------------------------------
+
+    SuiteConfig siteSuite() throws IOException {
+        SuiteConfig s = suite();
+        s.site = new SuiteConfig.Site();
+        s.site.url = "https://owner.github.io/";
+        s.site.tagline = "Two apps & one <line>.";
+        s.site.badge = "0.1.0 prerelease";
+        s.site.requirements = "Needs `Vulkan`.";
+        s.site.feedbackUrl = "https://github.com/owner/framework/issues/new";
+        SuiteConfig.Link docs = new SuiteConfig.Link();
+        docs.label = "Docs";
+        docs.url = "https://owner.github.io/docs/";
+        s.site.links.add(docs);
+        return s;
+    }
+
+    String site(SuiteConfig s) { return new SuiteGenerator().generateSite(s, tmp, out); }
+
+    @Test
+    void theSiteCarriesItsOwnCopyOfTheScriptUnderItsOwnAddress() throws IOException {
+        String command = site(siteSuite());
+
+        assertEquals("irm https://owner.github.io/install.ps1 | iex", command);
+        String script = Files.readString(out.resolve("install.ps1"), StandardCharsets.UTF_8);
+        assertTrue(script.contains("irm https://owner.github.io/install.ps1 | iex"));
+        // the manifests stay where the members' own runs published them
+        assertTrue(script.contains("https://raw.githubusercontent.com/owner/editor/main/manifest.json"));
+        assertTrue(Files.exists(out.resolve(".nojekyll")));
+        assertFalse(Files.exists(out.resolve("README.md")), "the site has a page, not a README");
+    }
+
+    @Test
+    void theReadmePointsToTheSite() throws IOException {
+        generate(siteSuite());
+        assertTrue(Files.readString(out.resolve("README.md")).contains("The install page is https://owner.github.io,"));
+        generate(suite());
+        assertFalse(Files.readString(out.resolve("README.md")).contains("The install page is"));
+    }
+
+    @Test
+    void thePageShowsTheCommandAndEveryMember() throws IOException {
+        site(siteSuite());
+
+        String page = Files.readString(out.resolve("index.html"), StandardCharsets.UTF_8);
+        assertFalse(page.contains("{{"), "every token filled");
+        assertTrue(page.contains("<code id=\"install-command\">irm https://owner.github.io/install.ps1 | iex</code>"));
+        assertTrue(page.contains("Two apps &amp; one &lt;line&gt;."), "config text is escaped");
+        assertTrue(page.contains("Needs <code>Vulkan</code>."), "backticks become code");
+        assertTrue(page.contains("<a href=\"../apps/editor.html\">Editor</a>"));
+        assertTrue(page.contains("<h3>Explorer</h3>"));
+        assertTrue(page.indexOf("id=\"app-editor\"") < page.indexOf("id=\"app-explorer\""), "members in listed order");
+        assertTrue(page.contains("$env:INSTALL_ONLY = 'editor,explorer'"));
+        assertTrue(page.contains("&amp; \"$env:LOCALAPPDATA\\Programs\\Editor\\uninstall.cmd\" -All"));
+        assertTrue(page.contains("<a href=\"https://owner.github.io/docs/\">Docs</a>"));
+        assertTrue(page.contains("https://github.com/owner/framework/issues/new"));
+        assertTrue(page.contains("<span class=\"badge\">0.1.0 prerelease</span>"));
+    }
+
+    @Test
+    void thePageSaysWhatTheMembersChange() throws IOException {
+        Files.writeString(tmp.resolve("editor.json"), """
+                {"id": "editor", "name": "Editor", "repo": "owner/editor",
+                 "windows": {"binaries": [{"source": "target/editor.exe", "addToPath": true,
+                   "shortcuts": {"desktop": true, "startMenu": true},
+                   "fileAssociations": [{"extension": ".txt"}]}]}}
+                """);
+        site(siteSuite());
+
+        String page = Files.readString(out.resolve("index.html"), StandardCharsets.UTF_8);
+        assertTrue(page.contains("<li>each application in its own folder</li>"), "the two install under different parents");
+        assertTrue(page.contains("<li>desktop and Start menu shortcuts</li>"));
+        assertTrue(page.contains("so <code>editor</code> works from a terminal"));
+        assertTrue(page.contains("the file types Editor reads"));
+    }
+
+    @Test
+    void iconsAndScreenshotsAreCopiedBesideThePage() throws IOException {
+        // an .ico whose only frame is a PNG: the page serves the PNG
+        byte[] png = {(byte) 0x89, 'P', 'N', 'G', 13, 10, 26, 10, 1, 2, 3};
+        java.nio.ByteBuffer ico = java.nio.ByteBuffer.allocate(22 + png.length).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        ico.putShort((short) 0).putShort((short) 1).putShort((short) 1);
+        ico.put((byte) 0).put((byte) 0).put((byte) 0).put((byte) 0).putShort((short) 1).putShort((short) 32);
+        ico.putInt(png.length).putInt(22).put(png);
+        Files.write(tmp.resolve("editor.ico"), ico.array());
+        Files.writeString(tmp.resolve("editor.json"), """
+                {"id": "editor", "name": "Editor", "repo": "owner/editor",
+                 "windows": {"binaries": [{"source": "target/editor.exe", "icon": "editor.ico"}]}}
+                """);
+        Files.write(tmp.resolve("shot.png"), png);
+        SuiteConfig s = siteSuite();
+        s.members.get(0).image = "shot.png";
+        s.members.get(0).imageAlt = "Editor, \"editing\"";
+        site(s);
+
+        assertArrayEquals(png, Files.readAllBytes(out.resolve("img/editor.png")));
+        assertArrayEquals(png, Files.readAllBytes(out.resolve("img/editor-screen.png")));
+        String page = Files.readString(out.resolve("index.html"), StandardCharsets.UTF_8);
+        assertTrue(page.contains("<link rel=\"icon\" href=\"img/editor.png\">"));
+        assertTrue(page.contains("src=\"img/editor-screen.png\" alt=\"Editor, &quot;editing&quot;\""));
+    }
+
+    @Test
+    void theSiteNeedsAnHttpsAddress() throws IOException {
+        SuiteConfig none = suite();
+        assertThrows(InstallerException.class, () -> site(none));
+        SuiteConfig http = siteSuite();
+        http.site.url = "http://owner.github.io";
+        assertThrows(InstallerException.class, () -> site(http));
+    }
+
+    @Test
+    void refusesAMissingScreenshot() throws IOException {
+        SuiteConfig s = siteSuite();
+        s.members.get(1).image = "nope.png";
+        InstallerException e = assertThrows(InstallerException.class, () -> site(s));
+        assertTrue(e.getMessage().contains("explorer"), e.getMessage());
+    }
 }

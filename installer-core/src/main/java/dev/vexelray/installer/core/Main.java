@@ -13,6 +13,7 @@ import java.nio.file.Path;
  *      [--publish]        (token from $GITHUB_TOKEN)
  *
  * java -jar installer-core-*-cli.jar --suite suite.json [--out dist] [--base-url URL]
+ * java -jar installer-core-*-cli.jar --suite suite.json --site [--out site]   (the landing page, at the suite's site.url)
  * </pre>
  */
 public final class Main {
@@ -31,7 +32,7 @@ public final class Main {
         String config = "installer.json", version = null, out = "dist", assets = "build/release-assets";
         String notes = "", baseUrl = null, assetBaseUrl = null;
         String suite = null;
-        boolean publish = false;
+        boolean publish = false, site = false;
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "--config" -> config = value(args, ++i);
@@ -43,10 +44,13 @@ public final class Main {
                 case "--base-url" -> baseUrl = value(args, ++i);
                 case "--asset-base-url" -> assetBaseUrl = value(args, ++i);
                 case "--publish" -> publish = true;
+                case "--site" -> site = true;
                 default -> throw new InstallerException("unknown argument " + args[i]);
             }
         }
-        if (suite != null) return suite(Path.of(suite).toAbsolutePath(), Path.of(out).toAbsolutePath(), baseUrl);
+        if (site && suite == null) throw new InstallerException("--site needs --suite");
+        if (site && baseUrl != null) throw new InstallerException("--site takes its address from the suite's site.url, not --base-url");
+        if (suite != null) return suite(Path.of(suite).toAbsolutePath(), Path.of(out).toAbsolutePath(), baseUrl, site);
         Path configPath = Path.of(config).toAbsolutePath();
         InstallerConfig cfg;
         try {
@@ -79,12 +83,19 @@ public final class Main {
         return 0;
     }
 
-    private static int suite(Path suitePath, Path out, String baseUrl) {
+    private static int suite(Path suitePath, Path out, String baseUrl, boolean site) {
         SuiteConfig s;
         try {
             s = Json.read(Files.readString(suitePath, StandardCharsets.UTF_8), SuiteConfig.class);
         } catch (java.io.IOException e) {
             throw new InstallerException("cannot read suite " + suitePath + ": " + e.getMessage(), e);
+        }
+        if (site) {
+            String command = new SuiteGenerator().generateSite(s, suitePath.getParent(), out);
+            System.out.println("Generated the " + s.name + " landing page into " + out);
+            System.out.println("  one-liner:  " + command);
+            System.out.println("  next:       commit the generated files in " + out + " to the repo served at " + s.site.url);
+            return 0;
         }
         String command = new SuiteGenerator().generate(s, suitePath.getParent(), out, baseUrl);
         System.out.println("Generated the " + s.name + " suite installer into " + out);

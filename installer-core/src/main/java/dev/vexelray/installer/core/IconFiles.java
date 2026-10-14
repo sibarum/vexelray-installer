@@ -13,6 +13,7 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * Produces the {@code .ico} that Windows shortcuts need. An {@code .ico} is used as is; a square
@@ -35,6 +36,32 @@ final class IconFiles {
         } else {
             throw new InstallerException("icon " + source + " must be an .ico or a square .png");
         }
+    }
+
+    /**
+     * The icon as a web page shows it: the largest frame of an {@code .ico} when that frame is a PNG (as the
+     * 256px one usually is), else the file as it is. Returns the bytes and the extension to serve them under.
+     */
+    static Map.Entry<byte[], String> forWeb(Path source) throws IOException {
+        byte[] d = Files.readAllBytes(source);
+        String name = source.getFileName().toString().toLowerCase(Locale.ROOT);
+        if (!name.endsWith(".ico")) return Map.entry(d, name.substring(name.lastIndexOf('.') + 1));
+        ByteBuffer b = ByteBuffer.wrap(d).order(ByteOrder.LITTLE_ENDIAN);
+        int count = d.length >= 6 ? b.getShort(4) & 0xffff : 0;
+        int best = -1, bestSize = -1;
+        for (int i = 0; i < count && 6 + 16 * (i + 1) <= d.length; i++) {
+            int e = 6 + 16 * i;
+            int size = d[e] == 0 ? 256 : d[e] & 0xff;
+            if (size > bestSize) { bestSize = size; best = e; }
+        }
+        if (best >= 0) {
+            int len = b.getInt(best + 8), off = b.getInt(best + 12);
+            if (off >= 0 && len > 8 && off + len <= d.length && d[off] == (byte) 0x89 && d[off + 1] == 'P'
+                    && d[off + 2] == 'N' && d[off + 3] == 'G') {
+                return Map.entry(java.util.Arrays.copyOfRange(d, off, off + len), "png");
+            }
+        }
+        return Map.entry(d, "ico");
     }
 
     static byte[] icoFromPng(BufferedImage src, Path from) throws IOException {

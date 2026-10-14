@@ -128,6 +128,41 @@ every member; `INSTALL_VERSION` and `INSTALL_DIR` name one application, so they 
 (optional) links a member's name on the install page; `manifestUrl` (optional) overrides the URL derived from
 the member's `repo`, `branch` and `repoPath`.
 
+### A landing page
+
+A suite can also have a page of its own, served by GitHub Pages from a repo of its own (`owner.github.io`, say),
+so the command is short and the first thing people find:
+
+```json
+{
+  "site": {
+    "url": "https://owner.github.io",
+    "badge": "0.1.0 · prerelease",
+    "tagline": "One line under the name.",
+    "requirements": "Needs Windows 10 or 11.",
+    "feedbackUrl": "https://github.com/owner/repo/issues/new",
+    "accentColor": "#2563eb",
+    "links": [ { "label": "Docs", "url": "https://owner.github.io/docs/" } ]
+  },
+  "members": [
+    { "config": "../vexplore/installer.json", "page": "...", "image": "shots/vexplore.png", "imageAlt": "What it shows" }
+  ]
+}
+```
+
+```
+java -jar installer-core/target/installer-core-0.1.1-SNAPSHOT-cli.jar --suite suite.json --site --out ../owner.github.io
+```
+
+writes `index.html`, a copy of the suite's `install.ps1` (so the command is `irm https://owner.github.io/install.ps1 | iex`),
+each member's icon and screenshot under `img/`, and `.nojekyll`. Only `site.url` is required. The page shows the
+command with a copy button, a card for each member (its screenshot, or its icon when it has no `image`; its
+`description`), and what the install changes on the computer, worked out from the members' configs: install
+folders, shortcuts, the commands added to `PATH` and the applications that register file types. Text in the config
+may use `` `code` ``; everything else is escaped. The members' manifests stay where their own runs published them,
+so installs and updaters are the same whichever command installed them. Publish the folder from its repo's root with
+GitHub Pages (**Settings > Pages > Deploy from a branch**).
+
 ## What the generated files do
 
 - **install.ps1** reads `manifest.json`, downloads each binary, verifies its SHA-256, then
