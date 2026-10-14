@@ -48,7 +48,7 @@ A particular version or folder applies to one application, so this script ignore
 Run the install command again, or update one application from its folder:
 
 ```powershell
-& "{{EXAMPLE_DIR}}\update.cmd"
+& "{{PS_EXAMPLE_DIR}}\update.cmd"
 ```
 
 ### Uninstall
@@ -57,7 +57,7 @@ Use **Settings > Apps**, where each application has its own entry, or run the un
 folders:
 
 ```powershell
-& "{{EXAMPLE_DIR}}\uninstall.cmd" -Id {{EXAMPLE_ID}}
+& "{{PS_EXAMPLE_DIR}}\uninstall.cmd" -Id {{EXAMPLE_ID}}
 ```
 
 `-List` shows every install it knows about. Each application's install record is in `{{REGISTRY_DIR}}`,

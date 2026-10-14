@@ -74,6 +74,17 @@ class SuiteGeneratorTest {
     }
 
     @Test
+    void readmeCommandsUsePowershellVariables() throws IOException {
+        generate(suite());
+
+        String readme = Files.readString(out.resolve("README.md"));
+        PowershellFences.assertNoCmdVariables(readme);
+        assertTrue(readme.contains("& \"$env:LOCALAPPDATA\\Programs\\Editor\\update.cmd\""));
+        assertTrue(readme.contains("& \"$env:LOCALAPPDATA\\Programs\\Editor\\uninstall.cmd\" -Id editor"));
+        assertTrue(readme.contains("`%LOCALAPPDATA%\\vexelray-installer\\installs`"), "prose keeps the Windows form");
+    }
+
+    @Test
     void aHandWrittenReadmeIsLeftAlone() throws IOException {
         Files.createDirectories(out);
         Files.writeString(out.resolve("README.md"), "mine");

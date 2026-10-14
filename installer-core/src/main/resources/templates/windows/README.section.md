@@ -45,7 +45,7 @@ as `cmd.exe /c path args...`.
 ### Update
 
 ```powershell
-& "{{INSTALL_DIR}}\update.cmd"
+& "{{PS_INSTALL_DIR}}\update.cmd"
 ```
 
 Checks GitHub for newer versions of the binaries and installs them after asking. Use
@@ -56,7 +56,7 @@ Checks GitHub for newer versions of the binaries and installs them after asking.
 Use **Settings > Apps > {{NAME}} > Uninstall**, or:
 
 ```powershell
-& "{{INSTALL_DIR}}\uninstall.cmd"
+& "{{PS_INSTALL_DIR}}\uninstall.cmd"
 ```
 
 The uninstaller reads the install manifests in `{{REGISTRY_DIR}}`, so it removes exactly

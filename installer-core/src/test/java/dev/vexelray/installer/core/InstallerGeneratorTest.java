@@ -92,6 +92,24 @@ class InstallerGeneratorTest {
     }
 
     @Test
+    void readmeCommandsUsePowershellVariablesAndProseKeepsTheWindowsForm() throws IOException {
+        run("1.0.0", "2026-01-01T00:00:00Z");
+
+        String readme = Files.readString(out.resolve("README.md"));
+        PowershellFences.assertNoCmdVariables(readme);
+        assertTrue(readme.contains("& \"$env:LOCALAPPDATA\\Programs\\MyApp\\update.cmd\""));
+        assertTrue(readme.contains("& \"$env:LOCALAPPDATA\\Programs\\MyApp\\uninstall.cmd\""));
+        assertTrue(readme.contains("`%LOCALAPPDATA%\\Programs\\MyApp\\install-manifest.json`"));
+    }
+
+    @Test
+    void powershellPathRewritesEveryCmdVariable() {
+        assertEquals("$env:LOCALAPPDATA\\Programs\\A B", WindowsTarget.powershellPath("%LOCALAPPDATA%\\Programs\\A B"));
+        assertEquals("${env:ProgramFiles(x86)}\\A", WindowsTarget.powershellPath("%ProgramFiles(x86)%\\A"));
+        assertEquals("D:\\Apps\\A", WindowsTarget.powershellPath("D:\\Apps\\A"));
+    }
+
+    @Test
     void manifestHashesMatchTheScriptsOnDisk() throws IOException {
         run("1.0.0", "2026-01-01T00:00:00Z");
         JsonNode m = manifest();

@@ -103,7 +103,7 @@ public final class SuiteGenerator {
                 "INSTALL_URL", installUrl,
                 "MEMBER_TABLE", String.join("\n", table),
                 "EXAMPLE_IDS", members.size() > 1 ? first.config.id + "," + members.get(1).config.id : first.config.id,
-                "EXAMPLE_DIR", WindowsTarget.installDir(first.config, first.config.windows),
+                "PS_EXAMPLE_DIR", WindowsTarget.powershellPath(WindowsTarget.installDir(first.config, first.config.windows)),
                 "EXAMPLE_ID", first.config.id,
                 "REGISTRY_DIR", WindowsTarget.registryDir(first.config.windows)));
         Path readmePath = outDir.resolve("README.md");

@@ -34,6 +34,12 @@ public final class WindowsTarget implements PlatformTarget {
         return InstallerConfig.blank(p.registryDir) ? DEFAULT_REGISTRY_DIR : p.registryDir;
     }
 
+    /** A path as PowerShell reads it inside double quotes: {@code %VAR%} becomes {@code $env:VAR}. */
+    static String powershellPath(String path) {
+        return java.util.regex.Pattern.compile("%([A-Za-z_][A-Za-z0-9_()]*)%").matcher(path).replaceAll(m ->
+                java.util.regex.Matcher.quoteReplacement(m.group(1).matches("\\w+") ? "$env:" + m.group(1) : "${env:" + m.group(1) + "}"));
+    }
+
     static String installDir(InstallerConfig c, PlatformConfig p) {
         return (InstallerConfig.blank(p.installDir) ? DEFAULT_INSTALL_DIR : p.installDir).replace("{name}", c.name);
     }
@@ -195,6 +201,7 @@ public final class WindowsTarget implements PlatformTarget {
                 Map.entry("BINARY_TABLE", String.join("\n", table)),
                 Map.entry("JAVA_NOTE", javaNote),
                 Map.entry("INSTALL_DIR", installDir),
+                Map.entry("PS_INSTALL_DIR", powershellPath(installDir)),
                 Map.entry("REGISTRY_DIR", registryDir(p)),
                 Map.entry("ID", c.id)));
     }
