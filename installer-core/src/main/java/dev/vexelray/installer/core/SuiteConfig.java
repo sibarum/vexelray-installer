@@ -59,10 +59,33 @@ public final class SuiteConfig {
         public String accentColor;
         /** Links in the page header, in order. */
         public List<Link> links = new ArrayList<>();
+        /** Sections of the suite's own between the members and the install details, in order; each is in the header too. */
+        public List<Section> sections = new ArrayList<>();
     }
 
     public static final class Link {
         public String label;
+        public String url;
+    }
+
+    /** A section of cards, such as one for people who want to build on what the members are built with. */
+    public static final class Section {
+        /** The anchor the header links to: lowercase letters, digits and dashes, and not {@code apps} or {@code details}. */
+        public String id;
+        public String title;
+        /** The header's name for it, if shorter than the title. */
+        public String nav;
+        /** A paragraph under the title. */
+        public String lede;
+        public List<Card> cards = new ArrayList<>();
+        /** A button under the cards, for where the section leads. */
+        public Link action;
+    }
+
+    public static final class Card {
+        public String title;
+        public String text;
+        /** Optional; links the card's title. */
         public String url;
     }
 

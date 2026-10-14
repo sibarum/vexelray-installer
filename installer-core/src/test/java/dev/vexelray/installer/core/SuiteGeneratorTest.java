@@ -234,6 +234,82 @@ class SuiteGeneratorTest {
         assertThrows(InstallerException.class, () -> site(http));
     }
 
+    SuiteConfig.Section buildSection() {
+        SuiteConfig.Section sec = new SuiteConfig.Section();
+        sec.id = "build";
+        sec.title = "Build your own";
+        sec.nav = "Developers";
+        sec.lede = "Start from `the template`.";
+        SuiteConfig.Card linked = new SuiteConfig.Card();
+        linked.title = "Generate";
+        linked.text = "One <command>.";
+        linked.url = "https://owner.github.io/docs/start.html";
+        SuiteConfig.Card plain = new SuiteConfig.Card();
+        plain.title = "Edit";
+        plain.text = "In `Editor`.";
+        sec.cards.add(linked);
+        sec.cards.add(plain);
+        sec.action = new SuiteConfig.Link();
+        sec.action.label = "Read the guide";
+        sec.action.url = "https://owner.github.io/docs/";
+        return sec;
+    }
+
+    @Test
+    void aSectionOfTheSuitesOwnSitsBetweenTheMembersAndTheDetails() throws IOException {
+        SuiteConfig s = siteSuite();
+        s.site.sections.add(buildSection());
+        site(s);
+
+        String page = Files.readString(out.resolve("index.html"), StandardCharsets.UTF_8);
+        assertFalse(page.contains("{{"), "every token filled");
+        int apps = page.indexOf("<section id=\"apps\""), build = page.indexOf("<section id=\"build\""), details = page.indexOf("<section id=\"details\"");
+        assertTrue(apps < build && build < details, "in order");
+        assertTrue(page.contains("<h2 id=\"build-title\">Build your own</h2>"));
+        assertTrue(page.contains("<p class=\"lede\">Start from <code>the template</code>.</p>"));
+        assertTrue(page.contains("<h3><a href=\"https://owner.github.io/docs/start.html\">Generate</a></h3><p>One &lt;command&gt;.</p>"));
+        assertTrue(page.contains("<h3>Edit</h3><p>In <code>Editor</code>.</p>"));
+        assertTrue(page.contains("<a class=\"button\" href=\"https://owner.github.io/docs/\">Read the guide</a>"));
+        assertTrue(page.contains("<a href=\"#apps\">Applications</a><a href=\"#build\">Developers</a><a href=\"#details\">Details</a><a href=\"https://owner.github.io/docs/\">Docs</a>"),
+                "the header names it, after the members");
+    }
+
+    @Test
+    void withNoSectionsThePageIsAsBefore() throws IOException {
+        site(siteSuite());
+        String page = Files.readString(out.resolve("index.html"), StandardCharsets.UTF_8);
+        assertFalse(page.contains("class=\"card\""));
+        assertTrue(page.contains("<a href=\"#apps\">Applications</a><a href=\"#details\">Details</a>"));
+    }
+
+    @Test
+    void refusesASectionItCannotLinkTo() throws IOException {
+        SuiteConfig taken = siteSuite();
+        SuiteConfig.Section apps = buildSection();
+        apps.id = "apps";
+        taken.site.sections.add(apps);
+        assertThrows(InstallerException.class, () -> site(taken));
+        assertFalse(Files.exists(out.resolve("install.ps1")), "nothing written");
+
+        SuiteConfig badId = siteSuite();
+        SuiteConfig.Section spaced = buildSection();
+        spaced.id = "Build It";
+        badId.site.sections.add(spaced);
+        assertThrows(InstallerException.class, () -> site(badId));
+
+        SuiteConfig twice = siteSuite();
+        twice.site.sections.add(buildSection());
+        twice.site.sections.add(buildSection());
+        assertThrows(InstallerException.class, () -> site(twice));
+
+        SuiteConfig emptyCard = siteSuite();
+        SuiteConfig.Section sec = buildSection();
+        sec.cards.get(1).text = " ";
+        emptyCard.site.sections.add(sec);
+        InstallerException e = assertThrows(InstallerException.class, () -> site(emptyCard));
+        assertTrue(e.getMessage().contains("build"), e.getMessage());
+    }
+
     @Test
     void refusesAMissingScreenshot() throws IOException {
         SuiteConfig s = siteSuite();

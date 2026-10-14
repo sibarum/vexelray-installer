@@ -142,7 +142,15 @@ so the command is short and the first thing people find:
     "requirements": "Needs Windows 10 or 11.",
     "feedbackUrl": "https://github.com/owner/repo/issues/new",
     "accentColor": "#2563eb",
-    "links": [ { "label": "Docs", "url": "https://owner.github.io/docs/" } ]
+    "links": [ { "label": "Docs", "url": "https://owner.github.io/docs/" } ],
+    "sections": [
+      {
+        "id": "build", "title": "Build your own", "nav": "Developers",
+        "lede": "A paragraph under the title.",
+        "cards": [ { "title": "Start", "text": "What it is.", "url": "https://owner.github.io/docs/start.html" } ],
+        "action": { "label": "Read the guide", "url": "https://owner.github.io/docs/" }
+      }
+    ]
   },
   "members": [
     { "config": "../vexplore/installer.json", "page": "...", "image": "shots/vexplore.png", "imageAlt": "What it shows" }
@@ -158,7 +166,9 @@ writes `index.html`, a copy of the suite's `install.ps1` (so the command is `irm
 each member's icon and screenshot under `img/`, and `.nojekyll`. Only `site.url` is required. The page shows the
 command with a copy button, a card for each member (its screenshot, or its icon when it has no `image`; its
 `description`), and what the install changes on the computer, worked out from the members' configs: install
-folders, shortcuts, the commands added to `PATH` and the applications that register file types. Text in the config
+folders, shortcuts, the commands added to `PATH` and the applications that register file types. Each of
+`site.sections` goes between the members and those details, as a title, a paragraph, a row of cards (a card's `url`
+is optional) and an optional button, and gets a header link (`nav`, or its `title`) to its `id`. Text in the config
 may use `` `code` ``; everything else is escaped. The members' manifests stay where their own runs published them,
 so installs and updaters are the same whichever command installed them. Publish the folder from its repo's root with
 GitHub Pages (**Settings > Pages > Deploy from a branch**).

@@ -107,6 +107,7 @@ public final class SuiteGenerator {
             throw new InstallerException("--site needs a 'site' section with the 'url' the page is served from");
         if (!site.url.matches("https://[^\\s\"'<>]+"))
             throw new InstallerException("'site.url' must be an https:// address, not '" + site.url + "'");
+        String sections = sections(site);
         List<Resolved> members = resolve(s, baseDir);
         String installUrl = site.url.replaceAll("/+$", "") + "/install.ps1";
         String command = "irm " + installUrl + " | iex";
@@ -148,6 +149,7 @@ public final class SuiteGenerator {
                 : "<p class=\"hint\">" + prose(site.requirements) + "</p>");
         vars.put("DESCRIPTION", prose(description));
         vars.put("APP_CARDS", cards.toString().stripTrailing());
+        vars.put("SECTIONS", sections);
         vars.put("CHANGES", changes(members));
         vars.put("EXAMPLE_IDS", html(exampleIds(members)));
         vars.put("ID_LIST", idList(members));
@@ -302,8 +304,56 @@ public final class SuiteGenerator {
         return and(members.stream().map(r -> "<code>" + html(r.config.id) + "</code>").toList());
     }
 
+    private static List<SuiteConfig.Section> sectionList(SuiteConfig.Site site) {
+        return site.sections == null ? List.of() : site.sections;
+    }
+
+    /** The suite's own sections. Called before anything is written, so a mistake in any of them leaves the folder alone. */
+    private static String sections(SuiteConfig.Site site) {
+        Set<String> ids = new HashSet<>(List.of("apps", "details"));
+        for (SuiteConfig.Section sec : sectionList(site)) {
+            if (sec == null || InstallerConfig.blank(sec.title))
+                throw new InstallerException("every 'site.sections' entry needs a 'title'");
+            if (sec.id == null || !sec.id.matches("[a-z][a-z0-9]*(-[a-z0-9]+)*"))
+                throw new InstallerException("section '" + sec.title + "' needs an 'id' of lowercase letters, digits and dashes");
+            if (!ids.add(sec.id))
+                throw new InstallerException("the page already has a section with the id '" + sec.id + "'");
+            for (SuiteConfig.Card c : sec.cards == null ? List.<SuiteConfig.Card>of() : sec.cards)
+                if (c == null || InstallerConfig.blank(c.title) || InstallerConfig.blank(c.text))
+                    throw new InstallerException("every card in section '" + sec.id + "' needs a 'title' and a 'text'");
+            if (sec.action != null && (InstallerConfig.blank(sec.action.label) || InstallerConfig.blank(sec.action.url)))
+                throw new InstallerException("the 'action' of section '" + sec.id + "' needs a 'label' and a 'url'");
+        }
+        StringBuilder b = new StringBuilder();
+        for (SuiteConfig.Section sec : sectionList(site)) {
+            String title = sec.id + "-title";
+            b.append("    <section id=\"").append(sec.id).append("\" aria-labelledby=\"").append(title).append("\">\n")
+                    .append("      <h2 id=\"").append(title).append("\">").append(html(sec.title.trim())).append("</h2>\n");
+            if (!InstallerConfig.blank(sec.lede)) b.append("      <p class=\"lede\">").append(prose(sec.lede)).append("</p>\n");
+            if (sec.cards != null && !sec.cards.isEmpty()) {
+                b.append("      <div class=\"cards\">\n");
+                for (SuiteConfig.Card c : sec.cards) {
+                    String name = html(c.title.trim());
+                    if (!InstallerConfig.blank(c.url)) name = "<a href=\"" + attr(c.url) + "\">" + name + "</a>";
+                    b.append("        <article class=\"card\"><h3>").append(name).append("</h3><p>").append(prose(c.text))
+                            .append("</p></article>\n");
+                }
+                b.append("      </div>\n");
+            }
+            if (sec.action != null)
+                b.append("      <p class=\"action\"><a class=\"button\" href=\"").append(attr(sec.action.url)).append("\">")
+                        .append(html(sec.action.label)).append("</a></p>\n");
+            b.append("    </section>\n\n");
+        }
+        return b.toString().stripTrailing();
+    }
+
     private static String nav(SuiteConfig.Site site, String repo) {
-        StringBuilder b = new StringBuilder("<a href=\"#apps\">Applications</a><a href=\"#details\">Details</a>");
+        StringBuilder b = new StringBuilder("<a href=\"#apps\">Applications</a>");
+        for (SuiteConfig.Section sec : sectionList(site))   // checked by sections(), which runs first
+            b.append("<a href=\"#").append(sec.id).append("\">")
+                    .append(html(InstallerConfig.blank(sec.nav) ? sec.title.trim() : sec.nav.trim())).append("</a>");
+        b.append("<a href=\"#details\">Details</a>");
         for (SuiteConfig.Link l : site.links == null ? List.<SuiteConfig.Link>of() : site.links) {
             if (l == null || InstallerConfig.blank(l.label) || InstallerConfig.blank(l.url))
                 throw new InstallerException("every 'site.links' entry needs a 'label' and a 'url'");
