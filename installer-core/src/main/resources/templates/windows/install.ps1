@@ -10,6 +10,8 @@
 #   INSTALL_NO_ASSOCIATIONS=1  do not register file types
 #   INSTALL_FORCE=1          reinstall even if this version is already installed
 #
+# Updates and reinstalls keep the NO_* choices of the last install; set one to 0 to opt back in.
+#
 # The same options are accepted as arguments when the script is run from a file:
 #   -Version 1.2.3  -Dir C:\some\dir  -NoShortcuts  -NoPath  -NoAssociations  -Force
 
@@ -287,6 +289,13 @@ function ViShortcut([string]$lnk, [string]$target, [string]$arguments, [string]$
 
 # ---- install ---------------------------------------------------------------------------
 
+function ViOptOut([bool]$switch, [string]$envValue, $stored) {
+    if ($switch) { return $true }
+    if ($envValue -eq '0') { return $false }
+    if ($envValue) { return $true }
+    [bool]$stored
+}
+
 function ViInvokeInstall {
     param([string]$Version, [string]$Dir, [switch]$NoShortcuts, [switch]$NoPath, [switch]$NoAssociations, [switch]$Force)
     $ErrorActionPreference = 'Stop'
@@ -327,6 +336,11 @@ function ViInvokeInstall {
     if ($Dir) { $installDir = (ViExpand $Dir).TrimEnd('\') }
     elseif ($old) { $installDir = $old.installDir }
     else { $installDir = (ViExpand $plat.installDir).TrimEnd('\') }
+
+    # opt-outs: a switch or INSTALL_NO_*=1 skips, INSTALL_NO_*=0 opts back in, otherwise the last install's choice stands
+    $skipShortcuts = ViOptOut $NoShortcuts $env:INSTALL_NO_SHORTCUTS $old.options.noShortcuts
+    $skipPath = ViOptOut $NoPath $env:INSTALL_NO_PATH $old.options.noPath
+    $skipAssoc = ViOptOut $NoAssociations $env:INSTALL_NO_ASSOCIATIONS $old.options.noAssociations
 
     if ($old -and $old.version -eq $entry.version -and $old.installDir -eq $installDir -and -not $Force) {
         Write-Host "$appName $($entry.version) is already installed in $installDir. Set INSTALL_FORCE=1 to reinstall."
@@ -491,7 +505,6 @@ function ViInvokeInstall {
 
         # 3. shortcuts
         $shortcuts = @()
-        $skipShortcuts = $NoShortcuts -or [bool]$env:INSTALL_NO_SHORTCUTS
         if (-not $skipShortcuts) {
             foreach ($s in $staged) {
                 $sc = $s.Bin.shortcuts
@@ -521,7 +534,6 @@ function ViInvokeInstall {
 
         # 4. file associations: the binary gets the file as its last argument
         $associations = @()
-        $skipAssoc = $NoAssociations -or [bool]$env:INSTALL_NO_ASSOCIATIONS
         if (-not $skipAssoc) {
             foreach ($s in $staged) {
                 if (-not $s.Bin.fileAssociations) { continue }
@@ -549,7 +561,6 @@ function ViInvokeInstall {
 
         # 5. PATH
         $pathEntries = @()
-        $skipPath = $NoPath -or [bool]$env:INSTALL_NO_PATH
         if (-not $skipPath) {
             $wanted = @()
             foreach ($s in $staged) {
@@ -633,6 +644,7 @@ function ViInvokeInstall {
             shortcuts     = $shortcuts
             pathEntries   = $pathEntries
             fileAssociations = $associations
+            options       = [ordered]@{ noShortcuts = $skipShortcuts; noPath = $skipPath; noAssociations = $skipAssoc }
             registryKeys  = @($uninstallKey)
         }
         $json = $record | ConvertTo-Json -Depth 10

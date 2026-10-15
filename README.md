@@ -180,7 +180,8 @@ GitHub Pages (**Settings > Pages > Deploy from a branch**).
   registers file types, optionally edits the user PATH, and registers an Apps & features entry.
   Nothing is written to the install dir until every download has verified. Options:
   `INSTALL_VERSION`, `INSTALL_DIR`, `INSTALL_NO_SHORTCUTS`, `INSTALL_NO_PATH`,
-  `INSTALL_NO_ASSOCIATIONS`, `INSTALL_FORCE`.
+  `INSTALL_NO_ASSOCIATIONS`, `INSTALL_FORCE`. The `NO_*` choices in effect are stored in the
+  install record (`options`), and updates and reinstalls keep them; `INSTALL_NO_*=0` opts back in.
 - **File associations** are per user (`HKCU\Software\Classes`, no admin rights). Each extension
   gets a ProgID `<id>.<ext>` whose open command passes the file as the last argument: `"app.exe"
   "%1"`, and for a jar `javaw` (or the `.cmd` launcher when `shortcuts.gui` is false). The binary

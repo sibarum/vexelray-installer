@@ -26,6 +26,9 @@ Set these in the same PowerShell window *before* the install command:
 | `$env:INSTALL_NO_ASSOCIATIONS = '1'` | do not register {{NAME}} to open any file types |
 | `$env:INSTALL_FORCE = '1'` | reinstall even if this version is already installed |
 
+Updates and reinstalls remember the `INSTALL_NO_*` choices of the last install. To get shortcuts,
+the PATH entry or file types back, set that variable to `'0'` and run the install command again.
+
 ### What gets installed
 
 {{BINARY_TABLE}}

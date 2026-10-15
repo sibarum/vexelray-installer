@@ -140,6 +140,30 @@ try {
     Check (-not (ClassKey 'vi-smoke.vismoke') -and -not (ClassKey '.vismoke') -and -not (ClassKey 'vi-smoke.vismoketaken')) 'our file types are gone'
     Check ((ClassValue '.vismoketaken') -eq 'ViSmoke.Other' -and -not (ClassKey '.vismoketaken\OpenWithProgids')) "another program's extension is left as it was"
 
+    # ---- opt-outs outlive the environment that set them --------------------------------------
+    Write-Host "opt-outs kept across an update"
+    $env:INSTALL_VERSION = '1.0.0'; $env:INSTALL_NO_ASSOCIATIONS = '1'; $env:INSTALL_NO_SHORTCUTS = '1'
+    powershell -NoProfile -ExecutionPolicy Bypass -File "$root\site\install.ps1" 2>&1 | Out-Null
+    Remove-Item Env:INSTALL_VERSION, Env:INSTALL_NO_ASSOCIATIONS, Env:INSTALL_NO_SHORTCUTS
+    $recO = Get-Content -Raw "$regDir\vi-smoke.json" | ConvertFrom-Json
+    Check ($recO.options.noAssociations -and $recO.options.noShortcuts -and -not $recO.options.noPath) 'record stores the opt-outs'
+    & "$installDir\update.cmd" -Yes 2>&1 | Out-Null
+    $recO = Get-Content -Raw "$regDir\vi-smoke.json" | ConvertFrom-Json
+    Check ($recO.version -eq '1.1.0') 'opted-out install updated'
+    Check (-not (ClassKey 'vi-smoke.vismoke') -and -not (ClassKey '.vismoke') -and @($recO.fileAssociations | Where-Object { $_ }).Count -eq 0) 'update registers no file types the user declined'
+    Check (-not (Test-Path "$desktop\ViSmoke.lnk") -and @($recO.shortcuts | Where-Object { $_ }).Count -eq 0) 'update creates no shortcuts the user declined'
+    Check ((([Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment').GetValue('Path', '', 'DoNotExpandEnvironmentNames')) -like "*$installDir*")) 'what was not declined is still done'
+    $env:INSTALL_NO_ASSOCIATIONS = '0'; $env:INSTALL_FORCE = '1'
+    powershell -NoProfile -ExecutionPolicy Bypass -File "$root\site\install.ps1" 2>&1 | Out-Null
+    Remove-Item Env:INSTALL_NO_ASSOCIATIONS, Env:INSTALL_FORCE
+    $recO = Get-Content -Raw "$regDir\vi-smoke.json" | ConvertFrom-Json
+    Check ((ClassValue '.vismoke') -eq 'vi-smoke.vismoke' -and -not $recO.options.noAssociations) 'INSTALL_NO_ASSOCIATIONS=0 opts back in'
+    Check (-not (Test-Path "$desktop\ViSmoke.lnk") -and $recO.options.noShortcuts) 'the other opt-out still stands'
+    & "$installDir\uninstall.cmd" -Yes 2>&1 | Out-Null
+    Start-Sleep -Seconds 5
+    Check (-not (Test-Path $installDir) -and -not (ClassKey '.vismoke')) 'opted-out install uninstalled'
+    Check (([Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment').GetValue('Path', '', 'DoNotExpandEnvironmentNames')) -eq $pathBefore) 'user PATH restored again'
+
     # ---- two installs: a runtime, and an app that needs it ---------------------------------
     Write-Host "runtime + dependent app"
     function BuildTo([string]$cfg, [string]$name, [string]$ver) {
