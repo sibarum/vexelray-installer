@@ -80,13 +80,12 @@ public final class WindowsTarget implements PlatformTarget {
                 sg.put("subject", bc.signedBy);
                 if (!InstallerConfig.blank(bc.signerThumbprint)) sg.put("thumbprint", bc.signerThumbprint.toUpperCase(Locale.ROOT));
             }
-            if (b.icon() != null) {
-                ObjectNode ic = e.putObject("icon");
-                ic.put("file", b.icon().file());
-                ic.put("url", b.icon().url());
-                ic.put("sha256", b.icon().sha256());
-                ic.put("size", b.icon().size());
-                ic.put("installPath", "{installDir}\\" + (sub.isEmpty() ? "" : sub + "\\") + b.icon().file());
+            if (b.icon() != null) iconEntry(e.putObject("icon"), b.icon(), sub);
+            // file-type icons, each once; an association names its own by file
+            List<ResolvedBinary.ResolvedIcon> typeIcons = b.distinctTypeIcons();
+            if (!typeIcons.isEmpty()) {
+                ArrayNode fi = e.putArray("fileIcons");
+                for (ResolvedBinary.ResolvedIcon ti : typeIcons) iconEntry(fi.addObject(), ti, sub);
             }
             if (b.isJar()) {
                 String dir = ("{installDir}\\" + sub).replaceAll("\\\\+$", "");
@@ -119,6 +118,8 @@ public final class WindowsTarget implements PlatformTarget {
                     n.put("description", InstallerConfig.blank(fa.description)
                             ? c.name + " " + ext.substring(1).toUpperCase(Locale.ROOT) + " file" : fa.description.trim());
                     if (!InstallerConfig.blank(fa.contentType)) n.put("contentType", fa.contentType);
+                    ResolvedBinary.ResolvedIcon ti = b.typeIcons().get(ext);
+                    if (ti != null) n.put("icon", ti.file());
                     // jars open through javaw (no console) like their shortcuts, unless shortcuts say gui=false
                     if (b.isJar()) n.put("gui", sc == null || sc.gui == null || sc.gui);
                 }
@@ -139,6 +140,14 @@ public final class WindowsTarget implements PlatformTarget {
         }
         platform.set("binaries", binaries);
         return platform;
+    }
+
+    private static void iconEntry(ObjectNode ic, ResolvedBinary.ResolvedIcon icon, String sub) {
+        ic.put("file", icon.file());
+        ic.put("url", icon.url());
+        ic.put("sha256", icon.sha256());
+        ic.put("size", icon.size());
+        ic.put("installPath", "{installDir}\\" + (sub.isEmpty() ? "" : sub + "\\") + icon.file());
     }
 
     @Override public String installCommand(String installerUrl) { return "irm " + installerUrl + " | iex"; }

@@ -365,6 +365,18 @@ function ViInvokeInstall {
                 }
                 $ic = [pscustomobject]@{ Target = $itarget; Temp = $itemp; Meta = $b.icon }
             }
+            $fic = @()
+            foreach ($fi in @($b.fileIcons | Where-Object { $_ })) {
+                $ftarget = ViExpand $fi.installPath.Replace('{installDir}', $installDir)
+                $ftemp = $null
+                if (-not ((Test-Path -LiteralPath $ftarget) -and ((ViSha $ftarget) -eq $fi.sha256))) {
+                    ViInfo "$($fi.file)"
+                    $ftemp = Join-Path $tmp $fi.file
+                    Invoke-WebRequest -UseBasicParsing -Uri $fi.url -OutFile $ftemp
+                    if ((ViSha $ftemp) -ne $fi.sha256) { throw "Checksum mismatch for $($fi.file) downloaded from $($fi.url). Nothing was installed." }
+                }
+                $fic += [pscustomobject]@{ Target = $ftarget; Temp = $ftemp; Meta = $fi }
+            }
             if ($b.kind -eq 'archive') {
                 $adir = ViExpand $b.installPath.Replace('{installDir}', $installDir)
                 $prev = $null
@@ -394,7 +406,7 @@ function ViInvokeInstall {
             $target = ViExpand $b.installPath.Replace('{installDir}', $installDir)
             if ((Test-Path -LiteralPath $target) -and ((ViSha $target) -eq $b.sha256)) {
                 ViInfo "$($b.file) is already current"
-                $staged += [pscustomobject]@{ Bin = $b; Target = $target; Temp = $null; Icon = $ic }
+                $staged += [pscustomobject]@{ Bin = $b; Target = $target; Temp = $null; Icon = $ic; FileIcons = $fic }
                 continue
             }
             ViInfo ("{0} ({1:N1} MB)" -f $b.file, ($b.size / 1MB))
@@ -402,7 +414,7 @@ function ViInvokeInstall {
             Invoke-WebRequest -UseBasicParsing -Uri $b.url -OutFile $dl
             if ((ViSha $dl) -ne $b.sha256) { throw "Checksum mismatch for $($b.file) downloaded from $($b.url). Nothing was installed." }
             ViCheckSignature $dl $b.signature $b.file
-            $staged += [pscustomobject]@{ Bin = $b; Target = $target; Temp = $dl; Icon = $ic }
+            $staged += [pscustomobject]@{ Bin = $b; Target = $target; Temp = $dl; Icon = $ic; FileIcons = $fic }
         }
         $tools = @()
         foreach ($tn in 'uninstall.ps1', 'update.ps1') {
@@ -448,6 +460,11 @@ function ViInvokeInstall {
                 ViEnsureDir (Split-Path $s.Icon.Target -Parent)
                 if ($s.Icon.Temp) { Move-Item -Force -LiteralPath $s.Icon.Temp -Destination $s.Icon.Target }
                 $files += [ordered]@{ path = $s.Icon.Target; kind = 'icon'; name = $s.Bin.name; version = $s.Bin.version; sha256 = $s.Icon.Meta.sha256 }
+            }
+            foreach ($fi in @($s.FileIcons | Where-Object { $_ })) {
+                ViEnsureDir (Split-Path $fi.Target -Parent)
+                if ($fi.Temp) { Move-Item -Force -LiteralPath $fi.Temp -Destination $fi.Target }
+                $files += [ordered]@{ path = $fi.Target; kind = 'file-icon'; name = $s.Bin.name; version = $s.Bin.version; sha256 = $fi.Meta.sha256 }
             }
             if ($s.Bin.kind -eq 'jar') {
                 $launcher = ViExpand $s.Bin.launcher.Replace('{installDir}', $installDir)
@@ -516,8 +533,13 @@ function ViInvokeInstall {
                 }
                 $icon = if ($s.Icon) { $s.Icon.Target } elseif ($s.Bin.kind -eq 'native') { $s.Target } else { $null }
                 foreach ($fa in @($s.Bin.fileAssociations)) {
+                    $ficon = $icon
+                    if ($fa.icon) {
+                        $own = @($s.FileIcons | Where-Object { $_ -and $_.Meta.file -eq $fa.icon }) | Select-Object -First 1
+                        if ($own) { $ficon = $own.Target }
+                    }
                     try {
-                        $a = ViAssocAdd $fa $cmd $icon
+                        $a = ViAssocAdd $fa $cmd $ficon
                         $associations += $a
                         ViInfo ("Opens {0} files{1}" -f $fa.extension, $(if ($a.isDefault) { ' (default)' } else { ' (listed under Open with)' }))
                     } catch { Write-Warning "Could not register $($fa.extension): $($_.Exception.Message)" }

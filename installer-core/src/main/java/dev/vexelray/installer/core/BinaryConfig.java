@@ -27,8 +27,8 @@ public final class BinaryConfig {
      */
     public String icon;
     /**
-     * Extensions this binary opens ({@code "%1"} is passed as the last argument). Uses {@code icon} for the
-     * file type, or a native exe's own icon. Not for archives.
+     * Extensions this binary opens ({@code "%1"} is passed as the last argument). A type without an
+     * {@code icon} of its own uses this binary's {@code icon}, or a native exe's own icon. Not for archives.
      */
     public java.util.List<FileAssociation> fileAssociations;
     /** Minimum Java major version, for jars. */

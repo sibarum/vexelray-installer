@@ -46,15 +46,19 @@ try {
     Start-Sleep -Seconds 2
     Copy-Item "$env:windir\System32\where.exe" "$root\src\app.exe"
     [IO.File]::WriteAllText("$root\src\tool.jar", "not really a jar v1")
+    Add-Type -AssemblyName System.Drawing
+    $bmp = New-Object System.Drawing.Bitmap 32, 32; $bmp.Save("$root\src\doc.png", [System.Drawing.Imaging.ImageFormat]::Png); $bmp.Dispose()
     function SmokeConfig([bool]$toolAssoc) {
         $tool = @{ name = 'tool'; source = 'src/tool.jar'; javaMin = 17; shortcuts = @{ desktop = $true; label = 'ViSmoke Tool' } }
         if ($toolAssoc) { $tool.fileAssociations = @(@{ extension = 'vismokej' }) }
+        $taken = @{ extension = '.vismoketaken' }
+        if ($toolAssoc) { $taken.icon = 'src/doc.png' }
         @{
             id = 'vi-smoke'; name = 'ViSmoke'; publisher = 'Test'; description = 'smoke'; version = '1.0.0'
             repo = 'o/r'; tagFormat = '{version}'
             windows = @{ installDir = "$installDir"; binaries = @(
                 @{ name = 'app'; source = 'src/app.exe'; addToPath = $true; shortcuts = @{ desktop = $true; startMenu = $true; label = 'ViSmoke' }
-                   fileAssociations = @(@{ extension = '.vismoke'; description = 'ViSmoke Project'; contentType = 'text/x-vismoke' }, @{ extension = '.vismoketaken' }) },
+                   fileAssociations = @(@{ extension = '.vismoke'; description = 'ViSmoke Project'; contentType = 'text/x-vismoke' }, $taken) },
                 $tool
             ) }
         } | ConvertTo-Json -Depth 8 | Set-Content -Encoding ASCII "$root\installer.json"
@@ -90,6 +94,7 @@ try {
     Check (([Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment').GetValue('Path', '', 'DoNotExpandEnvironmentNames')) -like "*$installDir*") 'PATH entry added'
     Check ((ClassValue 'vi-smoke.vismoke\shell\open\command') -eq "`"$installDir\app.exe`" `"%1`"") 'ProgID open command runs the exe with the file'
     Check ((ClassValue 'vi-smoke.vismoke\DefaultIcon') -eq "$installDir\app.exe,0") 'ProgID uses the exe icon'
+    Check ((ClassValue 'vi-smoke.vismoketaken\DefaultIcon') -eq "$installDir\app-doc.ico,0" -and (Test-Path "$installDir\app-doc.ico")) 'a file type with an icon of its own uses it'
     Check ((ClassValue '.vismoke') -eq 'vi-smoke.vismoke' -and (ClassValue '.vismoke' 'Content Type') -eq 'text/x-vismoke') 'unclaimed extension becomes ours, with its content type'
     Check ($null -ne (ClassValue '.vismoke\OpenWithProgids' 'vi-smoke.vismoke')) 'listed under Open with'
     Check ((ClassValue '.vismoketaken') -eq 'ViSmoke.Other' -and $null -ne (ClassValue '.vismoketaken\OpenWithProgids' 'vi-smoke.vismoketaken')) 'claimed extension keeps its default, we only join Open with'
@@ -117,6 +122,7 @@ try {
     Check ((Get-Item "$installDir\app.exe").Length -eq ((Get-Item "$env:windir\System32\where.exe").Length + 1)) 'app.exe replaced'
     Check (-not (ClassKey 'vi-smoke.vismokej') -and -not (ClassKey '.vismokej')) 'an association dropped by the update is unregistered'
     Check ((ClassValue '.vismoke') -eq 'vi-smoke.vismoke') 'kept association is still the default after the update'
+    Check ((ClassValue 'vi-smoke.vismoketaken\DefaultIcon') -eq "$installDir\app.exe,0" -and -not (Test-Path "$installDir\app-doc.ico")) 'a file-type icon dropped by the update is removed'
     $out = & "$installDir\update.cmd" -Yes 2>&1 | Out-String
     Check ($out -match 'up to date') 'update again says up to date'
 

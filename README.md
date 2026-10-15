@@ -80,7 +80,7 @@ Defaults come from the project: `id` = artifactId, `name` = project name, `descr
 | `releasesRepo`, `tagFormat` | where binaries are downloaded from; defaults `repo` and `v{version}` |
 | `windows.installDir` | default `%LOCALAPPDATA%\Programs\{name}` |
 | `windows.registryDir` | where install manifests live; default `%LOCALAPPDATA%\vexelray-installer\installs` |
-| `windows.binaries[]` | `source` *or* `attached` (`main` or a classifier), `name`, `file`, `kind` (`native`/`jar`/`archive`, inferred from the extension; a `.zip` is an archive), `dir`, `version`, `addToPath`, `icon` (an `.ico`, or a square `.png` of 256px or more that is converted to one; used by the shortcuts and the Apps entry), `shortcuts {desktop, startMenu, label, gui}`, `javaMin` (jars), `jvmArgs[]` (jars; placed before `-jar`), `runtime` (jars; id of an install that provides `binjava.exe`, found through the registry at launch), `exposes` (archives; `{command: path-inside-zip}`, recorded under `commands`), `signedBy` + `signerThumbprint` (native exes; see Signing), `fileAssociations[] {extension, description, contentType}` (not archives; see File associations) |
+| `windows.binaries[]` | `source` *or* `attached` (`main` or a classifier), `name`, `file`, `kind` (`native`/`jar`/`archive`, inferred from the extension; a `.zip` is an archive), `dir`, `version`, `addToPath`, `icon` (an `.ico`, or a square `.png` of 256px or more that is converted to one; used by the shortcuts and the Apps entry), `shortcuts {desktop, startMenu, label, gui}`, `javaMin` (jars), `jvmArgs[]` (jars; placed before `-jar`), `runtime` (jars; id of an install that provides `binjava.exe`, found through the registry at launch), `exposes` (archives; `{command: path-inside-zip}`, recorded under `commands`), `signedBy` + `signerThumbprint` (native exes; see Signing), `fileAssociations[] {extension, description, contentType, icon}` (not archives; see File associations) |
 | `windows.requires[]` | `{id, min}`: installs that must be present first. A binary's `runtime` is required implicitly. The installer refuses, before changing anything, if one is missing or older than `min`; the uninstaller warns when removing something another install still needs |
 | `outputDirectory`, `assetsDirectory` | default `target/installer` and `target/installer-assets` |
 | `notes`, `baseUrl`, `assetBaseUrl`, `skip` | release notes; URL overrides for testing; skip the goal |
@@ -187,6 +187,9 @@ GitHub Pages (**Settings > Pages > Deploy from a branch**).
   is always listed under **Open with**. It becomes the default only when no other program has
   claimed the extension, because Windows does not let a program silently take over an existing
   file type. Executable types (`.exe`, `.bat`, `.ps1`, ...) are refused at generation time.
+  A file type shows the binary's `icon` (or a native exe's own) unless its association names an
+  `icon` of its own: an `.ico`, or a square `.png` converted like the binary's. Associations that
+  name the same file share it; it ships once, as `<binary>-<file stem>.ico` next to the binary.
   The install record notes which defaults it set, so updates drop associations the new version no
   longer lists, and uninstall removes only what it added.
 - **Archives** (`kind: archive`, a `.zip`) are verified, unpacked into `dir` (default: the install

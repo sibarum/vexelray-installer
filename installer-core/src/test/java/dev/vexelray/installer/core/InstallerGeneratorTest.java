@@ -305,6 +305,53 @@ class InstallerGeneratorTest {
     }
 
     @Test
+    void fileTypesCanHaveIconsOfTheirOwn() throws IOException {
+        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(64, 64, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        javax.imageio.ImageIO.write(img, "png", src.resolve("mark.png").toFile());
+        javax.imageio.ImageIO.write(img, "png", src.resolve("project file.png").toFile());
+        GenerationResult res = runWith(c -> {
+            BinaryConfig exe = c.windows.binaries.get(0);
+            exe.icon = "src/mark.png";
+            FileAssociation vxr = assoc("vxr"), vxs = assoc("vxs"), txt = assoc("vxt");
+            vxr.icon = "src/project file.png";
+            vxs.icon = "src/project file.png";
+            exe.fileAssociations = java.util.List.of(vxr, vxs, txt);
+        });
+        JsonNode exe = manifest().path("versions").get(0).path("platforms").path("windows").path("binaries").get(0);
+        String name = exe.path("name").asText();
+        String iconFile = name + "-project-file.ico";
+        assertEquals(1, exe.path("fileIcons").size(), "shared source ships once");
+        JsonNode fi = exe.path("fileIcons").get(0);
+        assertEquals(iconFile, fi.path("file").asText());
+        assertEquals("{installDir}\\" + iconFile, fi.path("installPath").asText());
+        assertEquals(InstallerGenerator.sha256(assets.resolve("1.0.0").resolve(iconFile)), fi.path("sha256").asText());
+        assertTrue(res.assets().contains(assets.resolve("1.0.0").resolve(iconFile)));
+        assertEquals(iconFile, exe.path("fileAssociations").get(0).path("icon").asText());
+        assertEquals(iconFile, exe.path("fileAssociations").get(1).path("icon").asText());
+        assertTrue(exe.path("fileAssociations").get(2).path("icon").isMissingNode(), "falls back to the binary's icon");
+        assertEquals(name + ".ico", exe.path("icon").path("file").asText());
+    }
+
+    @Test
+    void fileTypeIconsAreValidated() throws IOException {
+        Files.createDirectories(src.resolve("a"));
+        Files.createDirectories(src.resolve("b"));
+        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(32, 32, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        javax.imageio.ImageIO.write(img, "png", src.resolve("a/doc.png").toFile());
+        javax.imageio.ImageIO.write(img, "png", src.resolve("b/doc.png").toFile());
+        Files.writeString(src.resolve("doc.svg"), "<svg/>");
+        java.util.function.BiConsumer<String, String> bad = (one, two) -> assertThrows(InstallerException.class, () -> runWith(c -> {
+            FileAssociation x = assoc("vxr"), y = assoc("vxs");
+            x.icon = one;
+            y.icon = two;
+            c.windows.binaries.get(0).fileAssociations = java.util.List.of(x, y);
+        }));
+        bad.accept("src/missing.png", null);
+        bad.accept("src/doc.svg", null);
+        bad.accept("src/a/doc.png", "src/b/doc.png");
+    }
+
+    @Test
     void runtimeJvmArgsAndRequiresLandInTheManifest() throws IOException {
         runWith(c -> {
             BinaryConfig jar = c.windows.binaries.get(1);

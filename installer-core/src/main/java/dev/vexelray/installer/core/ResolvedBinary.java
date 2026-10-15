@@ -13,10 +13,16 @@ public record ResolvedBinary(
         String sha256,
         long size,
         Path staged,
-        ResolvedIcon icon) {
-    /** The staged, hashed {@code .ico} of a binary. */
+        ResolvedIcon icon,
+        java.util.Map<String, ResolvedIcon> typeIcons) {
+    /** The staged, hashed {@code .ico} of a binary, or of a file type it opens. */
     public record ResolvedIcon(String file, String url, String sha256, long size, Path staged) {}
 
-    public boolean isJar() { return "jar".equals(kind); }
+    /** The icons of {@code typeIcons}, each once, in the order the associations first name them. */
+    public java.util.List<ResolvedIcon> distinctTypeIcons() {
+        return typeIcons.values().stream().distinct().toList();
+    }
+
+    public boolean isJar(){ return "jar".equals(kind); }
     public boolean isArchive() { return "archive".equals(kind); }
 }

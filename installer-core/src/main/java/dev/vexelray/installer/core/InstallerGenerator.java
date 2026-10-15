@@ -109,6 +109,11 @@ public final class InstallerGenerator {
                     if (iprev != null) throw new InstallerException("icon file name '" + rb.icon().file() + "' collides with another file; give the binaries distinct names");
                     assets.add(rb.icon().staged());
                 }
+                for (ResolvedBinary.ResolvedIcon ti : rb.distinctTypeIcons()) {
+                    if (fileHashes.put(ti.file(), ti.sha256()) != null)
+                        throw new InstallerException("file-type icon '" + ti.file() + "' collides with another file; rename its source");
+                    assets.add(ti.staged());
+                }
             }
             resolved.put(t, bins);
         }
@@ -268,20 +273,46 @@ public final class InstallerGenerator {
         Path staged = assetOut.resolve(file);
         Files.copy(src, staged, StandardCopyOption.REPLACE_EXISTING);
 
-        ResolvedBinary.ResolvedIcon icon = null;
-        if (!InstallerConfig.blank(b.icon)) {
-            Path isrc = Path.of(b.icon);
-            if (!isrc.isAbsolute()) isrc = r.baseDir.resolve(isrc);
-            if (!Files.isRegularFile(isrc)) throw new InstallerException("icon not found: " + isrc);
-            String iconFile = name + ".ico";
-            Path istaged = assetOut.resolve(iconFile);
-            IconFiles.toIco(isrc, istaged);
-            icon = new ResolvedBinary.ResolvedIcon(iconFile, assetUrl(c, r, tag, iconFile),
-                    sha256(istaged), Files.size(istaged), istaged);
+        ResolvedBinary.ResolvedIcon icon = InstallerConfig.blank(b.icon) ? null
+                : stageIcon(c, r, tag, assetOut, iconSource(r, b.icon), name + ".ico");
+
+        // file-type icons: one .ico per distinct source, named <binary>-<source stem>.ico
+        Map<String, ResolvedBinary.ResolvedIcon> typeIcons = new LinkedHashMap<>();
+        Map<Path, ResolvedBinary.ResolvedIcon> bySource = new LinkedHashMap<>();
+        Map<String, Path> byFile = new java.util.HashMap<>();
+        for (FileAssociation fa : b.fileAssociations == null ? List.<FileAssociation>of() : b.fileAssociations) {
+            if (InstallerConfig.blank(fa.icon)) continue;
+            Path isrc = iconSource(r, fa.icon).toAbsolutePath().normalize();
+            ResolvedBinary.ResolvedIcon ti = bySource.get(isrc);
+            if (ti == null) {
+                String iconFile = name + "-" + stem(isrc.getFileName().toString()).replaceAll("[^A-Za-z0-9._-]", "-") + ".ico";
+                Path other = byFile.putIfAbsent(iconFile.toLowerCase(java.util.Locale.ROOT), isrc);
+                if (other != null)
+                    throw new InstallerException("file-type icons " + other + " and " + isrc + " would both ship as '"
+                            + iconFile + "'; give the source files distinct names");
+                ti = stageIcon(c, r, tag, assetOut, isrc, iconFile);
+                bySource.put(isrc, ti);
+            }
+            typeIcons.put(normalizeExtension(fa.extension), ti);
         }
         return new ResolvedBinary(b, name, file, kind,
                 InstallerConfig.blank(b.version) ? version : b.version,
-                assetUrl(c, r, tag, file), sha256(staged), Files.size(staged), staged, icon);
+                assetUrl(c, r, tag, file), sha256(staged), Files.size(staged), staged, icon, typeIcons);
+    }
+
+    private static Path iconSource(GenerationRequest r, String path) {
+        Path isrc = Path.of(path);
+        if (!isrc.isAbsolute()) isrc = r.baseDir.resolve(isrc);
+        if (!Files.isRegularFile(isrc)) throw new InstallerException("icon not found: " + isrc);
+        return isrc;
+    }
+
+    private static ResolvedBinary.ResolvedIcon stageIcon(InstallerConfig c, GenerationRequest r, String tag, Path assetOut,
+                                                         Path source, String iconFile) throws IOException {
+        Path istaged = assetOut.resolve(iconFile);
+        IconFiles.toIco(source, istaged);
+        return new ResolvedBinary.ResolvedIcon(iconFile, assetUrl(c, r, tag, iconFile),
+                sha256(istaged), Files.size(istaged), istaged);
     }
 
     /** An archive is unpacked as-is, so only what makes no sense for a folder is refused here. */
