@@ -12,104 +12,118 @@
 <style>
   :root {
     --accent: {{ACCENT}};
-    --bg: #f7f7f5;
-    --surface: #ffffff;
-    --text: #18181b;
-    --muted: #5d5f66;
-    --border: #e3e3df;
-    --code-bg: #121317;
-    --code-text: #eef0f3;
-    --tile: #ececea;
-    color-scheme: light;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #0f1012;
-      --surface: #18191d;
-      --text: #ececee;
-      --muted: #a3a6ae;
-      --border: #2b2d33;
-      --code-bg: #08090b;
-      --tile: #202227;
-      color-scheme: dark;
-    }
+    --bg: #050608;
+    --bg-2: #0b0d12;
+    --panel: #10131a;
+    --line: #1f2430;
+    --line-2: #2c3342;
+    --text: #f2f4f8;
+    --muted: #9aa3b5;
+    --dim: #5f6879;
+    --cyan: #3ee0ff;
+    --violet: #8b5cf6;
+    --lime: #b6f23c;
+    --grad: linear-gradient(100deg, var(--cyan), var(--accent) 55%, var(--violet));
+    --mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+    color-scheme: dark;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  a { color: var(--accent); }
-  .wrap { max-width: 960px; margin: 0 auto; padding: 0 16px; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow-x: hidden; }
+  a { color: var(--cyan); }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 0 16px; }
+  @media (min-width: 720px) { .wrap { padding: 0 32px; } }
 
-  .top { display: flex; align-items: center; gap: 20px; padding: 18px 0; }
-  .brand { font-weight: 700; color: var(--text); text-decoration: none; letter-spacing: -0.01em; }
-  .top nav { margin-left: auto; display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 0.92rem; }
+  .top { position: sticky; top: 0; z-index: 10; background: rgba(5, 6, 8, 0.78); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
+  .top .wrap { display: flex; align-items: center; gap: 20px; min-height: 56px; }
+  .brand { display: flex; align-items: center; gap: 10px; color: var(--text); text-decoration: none; font-weight: 800; letter-spacing: 0.02em; text-transform: uppercase; font-size: 0.95rem; flex: none; }
+  .brand img { width: 26px; height: 26px; }
+  .top nav { margin-left: auto; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 22px; font-size: 0.88rem; padding: 8px 0; }
   .top nav a { color: var(--muted); text-decoration: none; }
   .top nav a:hover { color: var(--text); }
 
-  .hero { text-align: center; padding: 56px 0 40px; }
-  .badge { display: inline-block; font-size: 0.8rem; font-weight: 600; color: var(--accent); border: 1px solid currentColor; border-radius: 999px; padding: 2px 12px; }
-  h1 { font-size: clamp(2.4rem, 7vw, 3.6rem); line-height: 1.05; letter-spacing: -0.03em; margin: 16px 0 12px; }
-  .tagline { font-size: 1.2rem; color: var(--muted); max-width: 600px; margin: 0 auto; }
+  .hero { position: relative; overflow: hidden; border-bottom: 1px solid var(--line); }
+  #field { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .hero::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, rgba(5,6,8,0.92) 0%, rgba(5,6,8,0.6) 45%, transparent 75%), linear-gradient(0deg, var(--bg) 0%, transparent 25%); pointer-events: none; }
+  .hero .wrap { position: relative; z-index: 1; padding-top: clamp(48px, 9vw, 104px); padding-bottom: clamp(48px, 8vw, 96px); }
+  .badge, .eyebrow { display: inline-block; font: 700 0.78rem/1 var(--mono); letter-spacing: 0.2em; text-transform: uppercase; color: var(--cyan); }
+  h1 { font-size: clamp(3rem, 11vw, 7.5rem); line-height: 0.9; letter-spacing: -0.05em; font-weight: 900; margin: 18px 0 20px; background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; width: fit-content; padding: 0 0.04em 0.1em 0; }
+  .tagline { font-size: clamp(1.1rem, 2.4vw, 1.5rem); line-height: 1.4; color: var(--text); max-width: 34ch; margin: 0; font-weight: 600; letter-spacing: -0.01em; }
 
-  .install { max-width: 680px; margin: 36px auto 0; text-align: left; }
-  .install-label { font-size: 0.9rem; color: var(--muted); margin: 0 0 8px; }
+  .install { max-width: 680px; margin-top: 36px; }
+  .install-label { font-size: 0.9rem; color: var(--muted); margin: 0 0 10px; }
   .install-label strong { color: var(--text); }
-  .cmd { display: flex; align-items: stretch; background: var(--code-bg); border-radius: 12px; overflow: hidden; }
-  .cmd code { flex: 1; min-width: 0; padding: 16px 18px; color: var(--code-text); font: 0.98rem/1.5 ui-monospace, "Cascadia Code", Consolas, monospace; overflow-x: auto; white-space: pre; }
-  .cmd code::before { content: "PS> "; color: #7d828c; }
+  .cmd { display: flex; align-items: stretch; background: #07080b; border: 1px solid var(--line-2); border-radius: 4px; overflow: hidden; }
+  .hero .cmd { box-shadow: 0 0 0 1px rgba(62,224,255,0.15), 0 0 40px rgba(37,99,235,0.25); }
+  .cmd code { flex: 1; min-width: 0; padding: 16px 18px; color: var(--text); font: 0.98rem/1.5 var(--mono); overflow-x: auto; white-space: pre; background: none; }
+  .cmd code::before { content: "PS> "; color: var(--dim); }
   .cmd.plain code::before { content: none; }
-  .copy { appearance: none; border: none; background: var(--accent); color: #fff; font: inherit; font-weight: 600; padding: 0 22px; cursor: pointer; min-width: 92px; }
-  .copy:hover { filter: brightness(1.1); }
-  .copy:focus-visible, summary:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .hint { font-size: 0.88rem; color: var(--muted); margin: 10px 0 0; }
-  .facts { display: flex; flex-wrap: wrap; gap: 6px 18px; list-style: none; padding: 0; margin: 14px 0 0; font-size: 0.9rem; }
-  .facts li::before { content: "\2713"; color: var(--accent); font-weight: 700; margin-right: 6px; }
-  .notice { max-width: 680px; margin: 0 auto 20px; background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 0; padding: 12px 16px; text-align: left; }
+  .copy { appearance: none; border: none; background: var(--text); color: var(--bg); font: 800 0.9rem system-ui, sans-serif; padding: 0 22px; cursor: pointer; min-width: 92px; }
+  .copy:hover { background: var(--cyan); }
+  .hint { font-size: 0.88rem; color: var(--muted); margin: 12px 0 0; }
+  .facts { display: flex; flex-wrap: wrap; gap: 8px 22px; list-style: none; padding: 0; margin: 18px 0 0; font: 0.84rem var(--mono); color: var(--text); }
+  .facts li::before { content: "\2713"; color: var(--lime); font-weight: 800; margin-right: 8px; }
+  .notice { margin: 0 0 18px; background: var(--panel); border: 1px solid var(--line-2); border-left: 3px solid var(--cyan); padding: 12px 16px; color: var(--text); }
+  .ctas { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
+  .ctas:empty { display: none; }
 
-  section { padding: 40px 0; }
-  h2 { font-size: 1.6rem; letter-spacing: -0.02em; margin: 0 0 8px; }
-  .lede { color: var(--muted); max-width: 720px; margin: 0 0 28px; }
+  .band { padding: clamp(64px, 10vw, 112px) 0; border-bottom: 1px solid var(--line); }
+  .band:nth-of-type(even) { background: var(--bg-2); }
+  h2 { font-size: clamp(2rem, 4.6vw, 3.4rem); line-height: 1.02; letter-spacing: -0.035em; font-weight: 900; margin: 16px 0 14px; }
+  .lede { color: var(--muted); font-size: 1.05rem; max-width: 62ch; margin: 0 0 36px; }
 
-  .apps { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 16px; }
-  .app { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; display: flex; flex-direction: column; }
-  .shot { aspect-ratio: 16 / 10; background: var(--tile); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  .apps { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 16px; }
+  .app { background: var(--panel); border: 1px solid var(--line-2); border-radius: 6px; overflow: hidden; display: flex; flex-direction: column; transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s; }
+  .app:hover { border-color: var(--cyan); transform: translateY(-3px); box-shadow: 0 14px 40px rgba(0,0,0,0.5), 0 0 30px rgba(62,224,255,0.12); }
+  .shot { aspect-ratio: 16 / 10; background: radial-gradient(circle at 50% 55%, rgba(37,99,235,0.22), transparent 65%), #0a0c11; display: flex; align-items: center; justify-content: center; overflow: hidden; border-bottom: 1px solid var(--line); }
   .shot img.screen { width: 100%; height: 100%; object-fit: cover; object-position: top left; }
-  .shot img.big { width: 72px; height: 72px; }
-  .app-body { padding: 14px 16px 16px; display: flex; gap: 12px; align-items: flex-start; }
-  .app-body img { width: 32px; height: 32px; flex: none; }
-  .app h3 { margin: 0; font-size: 1.05rem; }
+  .shot img.big { width: 88px; height: 88px; filter: drop-shadow(0 8px 24px rgba(62,224,255,0.25)); }
+  .app-body { padding: 16px 18px 18px; display: flex; gap: 14px; align-items: flex-start; }
+  .app-body img { width: 34px; height: 34px; flex: none; }
+  .app h3 { margin: 0; font-size: 1.08rem; letter-spacing: -0.01em; }
   .app h3 a { color: var(--text); text-decoration: none; }
-  .app h3 a:hover { text-decoration: underline; }
-  .app p { margin: 2px 0 0; color: var(--muted); font-size: 0.92rem; line-height: 1.45; }
+  .app h3 a:hover { color: var(--cyan); }
+  .app p { margin: 3px 0 0; color: var(--muted); font-size: 0.92rem; line-height: 1.5; }
 
-  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 16px; }
-  .card { background: var(--surface); border: 1px solid var(--border); border-top: 3px solid var(--accent); border-radius: 14px; padding: 16px 18px 18px; }
-  .card h3 { margin: 0 0 6px; font-size: 1.05rem; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); }
+  .card { background: var(--bg); padding: 28px 24px 30px; position: relative; transition: background 0.2s; }
+  .band:nth-of-type(even) .card { background: var(--bg-2); }
+  .card:hover, .band:nth-of-type(even) .card:hover { background: var(--panel); }
+  .card::before { content: ""; position: absolute; left: 0; top: 0; width: 40px; height: 2px; background: var(--grad); }
+  .card .stat { display: block; font: 900 1.7rem/1 var(--mono); letter-spacing: -0.03em; margin-bottom: 14px; background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; width: fit-content; }
+  .card h3 { margin: 0 0 8px; font-size: 1.12rem; letter-spacing: -0.01em; }
   .card h3 a { color: var(--text); text-decoration: none; }
-  .card h3 a:hover { text-decoration: underline; }
-  .card p { margin: 0; color: var(--muted); font-size: 0.92rem; line-height: 1.5; }
-  .action { margin: 24px 0 0; }
-  .button { display: inline-block; background: var(--accent); color: #fff; font-weight: 600; text-decoration: none; padding: 10px 20px; border-radius: 10px; }
-  .button:hover { filter: brightness(1.1); }
+  .card h3 a:hover { color: var(--cyan); }
+  .card p { margin: 0; color: var(--muted); font-size: 0.92rem; line-height: 1.55; }
+  .action { margin: 32px 0 0; }
+  .button { display: inline-flex; align-items: center; background: var(--text); color: var(--bg); font-weight: 700; font-size: 0.95rem; text-decoration: none; padding: 13px 22px; border-radius: 4px; }
+  .button:hover { background: var(--cyan); }
+  .button::after { content: "\2192"; margin-left: 10px; }
+  .button.ghost { background: transparent; color: var(--text); border: 1px solid var(--line-2); }
+  .button.ghost:hover { border-color: var(--cyan); color: var(--cyan); }
 
-  .faq { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 4px 20px; }
-  details { border-bottom: 1px solid var(--border); padding: 14px 0; }
-  details:last-child { border-bottom: none; }
-  summary { cursor: pointer; font-weight: 600; }
-  details > *:not(summary) { margin: 12px 0 0; }
-  details ul { padding-left: 1.2em; }
-  details li { margin: 4px 0; }
+  .faq { border-top: 1px solid var(--line-2); max-width: 880px; }
+  details { border-bottom: 1px solid var(--line); padding: 18px 0; }
+  summary { cursor: pointer; font-weight: 700; font-size: 1.05rem; list-style: none; display: flex; justify-content: space-between; gap: 16px; }
+  summary::-webkit-details-marker { display: none; }
+  summary::after { content: "+"; font: 400 1.4rem/1 var(--mono); color: var(--cyan); transition: transform 0.2s; }
+  details[open] summary::after { transform: rotate(45deg); }
+  summary:hover { color: var(--cyan); }
+  details > *:not(summary) { margin: 14px 0 0; color: var(--muted); }
+  details ul, details ol { padding-left: 1.2em; }
+  details li { margin: 6px 0; }
   details .cmd { margin-top: 10px; }
   details .cmd code { font-size: 0.88rem; }
-  code.inline, p code, li code { font: 0.88em ui-monospace, Consolas, monospace; background: var(--tile); padding: 1px 5px; border-radius: 4px; }
-  kbd { display: inline-block; padding: 0 6px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; background: var(--bg); font: 0.85em ui-monospace, Consolas, monospace; }
+  code.inline, p code, li code { font: 0.88em var(--mono); color: #d7e3ff; background: rgba(62, 224, 255, 0.08); padding: 1px 5px; border-radius: 3px; }
+  kbd { display: inline-block; padding: 0 6px; border: 1px solid var(--line-2); border-bottom-width: 2px; border-radius: 4px; background: var(--panel); color: var(--text); font: 0.85em var(--mono); }
 
-  footer { border-top: 1px solid var(--border); padding: 24px 0 40px; font-size: 0.85rem; color: var(--muted); }
+  footer { padding: 26px 0 40px; font-size: 0.84rem; color: var(--dim); }
   footer a { color: var(--muted); }
 
+  .copy:focus-visible, summary:focus-visible, a:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+
   @media (max-width: 560px) {
-    .hero { padding-top: 32px; }
-    .top { flex-wrap: wrap; }
-    .top nav { margin-left: 0; }
+    .top .wrap { flex-wrap: wrap; }
+    .top nav { margin-left: 0; justify-content: flex-start; padding-top: 0; }
     .cmd { flex-direction: column; }
     .cmd code { white-space: pre-wrap; word-break: break-all; }
     .copy { padding: 10px; }
@@ -117,14 +131,17 @@
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header class="top">
-    <a class="brand" href="./">{{NAME}}</a>
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./">{{LOGO}}{{NAME}}</a>
     <nav aria-label="Links">{{NAV}}</nav>
-  </header>
+  </div>
+</header>
 
-  <main>
-    <div class="hero">
+<main>
+  <div class="hero">
+    <canvas id="field" aria-hidden="true"></canvas>
+    <div class="wrap">
       {{BADGE}}
       <h1>{{NAME}}</h1>
       <p class="tagline">{{TAGLINE}}</p>
@@ -142,22 +159,29 @@
         </ul>
         {{REQUIREMENTS}}
       </div>
+      <div class="ctas">{{HERO_ACTION}}</div>
     </div>
+  </div>
 
-    <section id="apps" aria-labelledby="apps-title">
-      <h2 id="apps-title">What you get</h2>
-      <p class="lede">{{DESCRIPTION}}</p>
-      <div class="apps">
+  <section class="band" id="apps" aria-labelledby="apps-title">
+    <div class="wrap">
+    <div class="eyebrow">Applications</div>
+    <h2 id="apps-title">What you get</h2>
+    <p class="lede">{{DESCRIPTION}}</p>
+    <div class="apps">
 {{APP_CARDS}}
-      </div>
-    </section>
+    </div>
+    </div>
+  </section>
 
 {{SECTIONS}}
 
-    <section id="details" aria-labelledby="details-title">
-      <h2 id="details-title">Before and after you paste</h2>
-      <p class="lede">Everything the install line does, and how to undo it.</p>
-      <div class="faq">
+  <section class="band" id="details" aria-labelledby="details-title">
+    <div class="wrap">
+    <div class="eyebrow">Details</div>
+    <h2 id="details-title">Before and after you paste</h2>
+    <p class="lede">Everything the install line does, and how to undo it.</p>
+    <div class="faq">
         <details id="safety">
           <summary>Is it safe to paste a line from the internet?</summary>
           <p>It is a fair question, so read the script first. It is one file: <a href="{{INSTALL_URL}}">install.ps1</a>. What it does:</p>
@@ -201,14 +225,14 @@
           <div class="cmd plain"><code id="run-command">{{RUN_COMMAND}}</code><button class="copy" type="button" data-copy="run-command">Copy</button></div>
         </details>
         {{FEEDBACK}}
-      </div>
-    </section>
-  </main>
+    </div>
+    </div>
+  </section>
+</main>
 
-  <footer>
-    {{FOOTER}}
-  </footer>
-</div>
+<footer>
+  <div class="wrap">{{FOOTER}}</div>
+</footer>
 
 <script>
 (function () {
@@ -250,6 +274,60 @@
 
   var target = location.hash && document.querySelector("details" + location.hash);
   if (target) target.open = true;
+
+  // The hero's backdrop: a field of points lit by drifting distance-field circles. It draws only while it is
+  // on screen, and draws one still frame for anyone who asks for reduced motion.
+  var c = $("field"), ctx, w, h, mx = -1e4, my = -1e4;
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+  var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  function resize() {
+    var r = c.getBoundingClientRect();
+    c.width = w = Math.max(1, Math.round(r.width * dpr));
+    c.height = h = Math.max(1, Math.round(r.height * dpr));
+    ctx = c.getContext("2d");
+  }
+  resize();
+  addEventListener("resize", function () { resize(); if (reduce) frame(8000); });
+  c.parentNode.addEventListener("pointermove", function (e) {
+    var r = c.getBoundingClientRect(); mx = (e.clientX - r.left) * dpr; my = (e.clientY - r.top) * dpr;
+  });
+  c.parentNode.addEventListener("pointerleave", function () { mx = my = -1e4; });
+  function frame(t) {
+    t = t / 1000;
+    ctx.clearRect(0, 0, w, h);
+    var step = 22 * dpr;
+    var blobs = [
+      [w * (0.72 + 0.1 * Math.sin(t * 0.31)), h * (0.42 + 0.18 * Math.cos(t * 0.27)), 220 * dpr],
+      [w * (0.86 + 0.06 * Math.cos(t * 0.43)), h * (0.72 + 0.12 * Math.sin(t * 0.37)), 150 * dpr],
+      [w * (0.58 + 0.08 * Math.cos(t * 0.21)), h * (0.2 + 0.1 * Math.sin(t * 0.5)), 110 * dpr],
+      [mx, my, 120 * dpr]
+    ];
+    for (var y = step / 2; y < h; y += step) {
+      for (var x = step / 2; x < w; x += step) {
+        var d = 1e9;
+        for (var i = 0; i < blobs.length; i++) {
+          var dx = x - blobs[i][0], dy = y - blobs[i][1];
+          var sd = Math.sqrt(dx * dx + dy * dy) - blobs[i][2];
+          var k = 80 * dpr, hh = Math.max(k - Math.abs(d - sd), 0) / k;
+          d = Math.min(d, sd) - hh * hh * k * 0.25;
+        }
+        var glow = Math.exp(-Math.abs(d) / (34 * dpr));
+        var inside = d < 0 ? 0.32 + 0.18 * Math.sin(d / (18 * dpr) - t * 2) : 0;
+        var a = Math.min(1, 0.07 + glow + inside);
+        ctx.fillStyle = "hsla(" + (190 + 70 * (x / w)) + ",95%," + (55 + glow * 20) + "%," + a + ")";
+        var s = (1.6 + glow * 3.2 + (d < 0 ? 0.8 : 0)) * dpr;
+        ctx.fillRect(x - s / 2, y - s / 2, s, s);
+      }
+    }
+  }
+  if (reduce || !window.IntersectionObserver) { frame(8000); return; }
+  var on = false, raf = 0;
+  function loop(t) { if (!on) return; frame(t); raf = requestAnimationFrame(loop); }
+  new IntersectionObserver(function (es) {
+    var v = es[0].isIntersecting;
+    if (v && !on) { on = true; raf = requestAnimationFrame(loop); }
+    else if (!v) { on = false; cancelAnimationFrame(raf); }
+  }).observe(c);
 })();
 </script>
 </body>

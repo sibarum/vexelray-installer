@@ -57,6 +57,10 @@ public final class SuiteConfig {
         public String feedbackUrl;
         /** CSS colour of the copy button and links. */
         public String accentColor;
+        /** Optional: an .svg or .png beside the name in the header and as the tab icon, relative to the suite config. */
+        public String logo;
+        /** Optional: a second button in the hero, beside the install command, for where to read more. */
+        public Link heroAction;
         /** Links in the page header, in order. */
         public List<Link> links = new ArrayList<>();
         /** Sections of the suite's own between the members and the install details, in order; each is in the header too. */
@@ -85,6 +89,8 @@ public final class SuiteConfig {
     public static final class Card {
         public String title;
         public String text;
+        /** Optional: a figure or a word or two, set large above the title, such as {@code 0 fps}. */
+        public String stat;
         /** Optional; links the card's title. */
         public String url;
     }

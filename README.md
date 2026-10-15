@@ -142,12 +142,14 @@ so the command is short and the first thing people find:
     "requirements": "Needs Windows 10 or 11.",
     "feedbackUrl": "https://github.com/owner/repo/issues/new",
     "accentColor": "#2563eb",
+    "logo": "site/mark.svg",
+    "heroAction": { "label": "What it is built on", "url": "https://owner.github.io/tech.html" },
     "links": [ { "label": "Docs", "url": "https://owner.github.io/docs/" } ],
     "sections": [
       {
         "id": "build", "title": "Build your own", "nav": "Developers",
         "lede": "A paragraph under the title.",
-        "cards": [ { "title": "Start", "text": "What it is.", "url": "https://owner.github.io/docs/start.html" } ],
+        "cards": [ { "stat": "1 line", "title": "Start", "text": "What it is.", "url": "https://owner.github.io/docs/start.html" } ],
         "action": { "label": "Read the guide", "url": "https://owner.github.io/docs/" }
       }
     ]
@@ -163,12 +165,13 @@ java -jar installer-core/target/installer-core-0.1.1-SNAPSHOT-cli.jar --suite su
 ```
 
 writes `index.html`, a copy of the suite's `install.ps1` (so the command is `irm https://owner.github.io/install.ps1 | iex`),
-each member's icon and screenshot under `img/`, and `.nojekyll`. Only `site.url` is required. The page shows the
-command with a copy button, a card for each member (its screenshot, or its icon when it has no `image`; its
+each member's icon and screenshot under `img/` (and `site.logo` as `img/logo.svg` or `.png`), and `.nojekyll`. Only
+`site.url` is required. The page is dark, with the name over a live backdrop that draws only while it is on screen. It shows the
+command with a copy button (and `site.heroAction` as a button under it), a card for each member (its screenshot, or its icon when it has no `image`; its
 `description`), and what the install changes on the computer, worked out from the members' configs: install
 folders, shortcuts, the commands added to `PATH` and the applications that register file types. Each of
 `site.sections` goes between the members and those details, as a title, a paragraph, a row of cards (a card's `url`
-is optional) and an optional button, and gets a header link (`nav`, or its `title`) to its `id`. Text in the config
+is optional, and so is its `stat`, a figure set large above its title) and an optional button, and gets a header link (`nav`, or its `title`) to its `id`. Text in the config
 may use `` `code` ``; everything else is escaped. The members' manifests stay where their own runs published them,
 so installs and updaters are the same whichever command installed them. Publish the folder from its repo's root with
 GitHub Pages (**Settings > Pages > Deploy from a branch**).

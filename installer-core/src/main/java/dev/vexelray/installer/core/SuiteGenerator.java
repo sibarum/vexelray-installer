@@ -108,6 +108,8 @@ public final class SuiteGenerator {
         if (!site.url.matches("https://[^\\s\"'<>]+"))
             throw new InstallerException("'site.url' must be an https:// address, not '" + site.url + "'");
         String sections = sections(site);
+        String heroAction = heroAction(site);
+        Path logo = logo(site, baseDir);
         List<Resolved> members = resolve(s, baseDir);
         String installUrl = site.url.replaceAll("/+$", "") + "/install.ps1";
         String command = "irm " + installUrl + " | iex";
@@ -116,7 +118,13 @@ public final class SuiteGenerator {
         Path img = outDir.resolve("img");
         Files.createDirectories(img);
         StringBuilder cards = new StringBuilder();
-        String favicon = "";
+        String favicon = "", logoTag = "";
+        if (logo != null) {
+            String name = "logo." + logo.getFileName().toString().replaceFirst(".*\\.", "").toLowerCase(Locale.ROOT);
+            Files.copy(logo, img.resolve(name), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            favicon = "<link rel=\"icon\" href=\"img/" + name + "\">";
+            logoTag = "<img src=\"img/" + name + "\" alt=\"\">";
+        }
         for (Resolved r : members) {
             String icon = copyIcon(r, img);
             if (favicon.isEmpty() && icon != null) favicon = "<link rel=\"icon\" href=\"" + attr(icon) + "\">";
@@ -138,6 +146,8 @@ public final class SuiteGenerator {
         String description = InstallerConfig.blank(s.description) ? "" : s.description.trim();
         vars.put("META_DESCRIPTION", attr(InstallerConfig.blank(site.tagline) ? description : site.tagline.trim()));
         vars.put("FAVICON", favicon);
+        vars.put("LOGO", logoTag);
+        vars.put("HERO_ACTION", heroAction);
         vars.put("ACCENT", InstallerConfig.blank(site.accentColor) ? "#2563eb" : cssColor(site.accentColor));
         vars.put("NAV", nav(site, s.repo));
         vars.put("BADGE", InstallerConfig.blank(site.badge) ? "" : "<span class=\"badge\">" + html(site.badge) + "</span>");
@@ -327,7 +337,10 @@ public final class SuiteGenerator {
         StringBuilder b = new StringBuilder();
         for (SuiteConfig.Section sec : sectionList(site)) {
             String title = sec.id + "-title";
-            b.append("    <section id=\"").append(sec.id).append("\" aria-labelledby=\"").append(title).append("\">\n")
+            String eyebrow = InstallerConfig.blank(sec.nav) ? sec.title.trim() : sec.nav.trim();
+            b.append("    <section class=\"band\" id=\"").append(sec.id).append("\" aria-labelledby=\"").append(title).append("\">\n")
+                    .append("      <div class=\"wrap\">\n")
+                    .append("      <div class=\"eyebrow\">").append(html(eyebrow)).append("</div>\n")
                     .append("      <h2 id=\"").append(title).append("\">").append(html(sec.title.trim())).append("</h2>\n");
             if (!InstallerConfig.blank(sec.lede)) b.append("      <p class=\"lede\">").append(prose(sec.lede)).append("</p>\n");
             if (sec.cards != null && !sec.cards.isEmpty()) {
@@ -335,17 +348,37 @@ public final class SuiteGenerator {
                 for (SuiteConfig.Card c : sec.cards) {
                     String name = html(c.title.trim());
                     if (!InstallerConfig.blank(c.url)) name = "<a href=\"" + attr(c.url) + "\">" + name + "</a>";
-                    b.append("        <article class=\"card\"><h3>").append(name).append("</h3><p>").append(prose(c.text))
-                            .append("</p></article>\n");
+                    b.append("        <article class=\"card\">");
+                    if (!InstallerConfig.blank(c.stat)) b.append("<span class=\"stat\">").append(html(c.stat.trim())).append("</span>");
+                    b.append("<h3>").append(name).append("</h3><p>").append(prose(c.text)).append("</p></article>\n");
                 }
                 b.append("      </div>\n");
             }
             if (sec.action != null)
                 b.append("      <p class=\"action\"><a class=\"button\" href=\"").append(attr(sec.action.url)).append("\">")
                         .append(html(sec.action.label)).append("</a></p>\n");
-            b.append("    </section>\n\n");
+            b.append("      </div>\n    </section>\n\n");
         }
         return b.toString().stripTrailing();
+    }
+
+    private static String heroAction(SuiteConfig.Site site) {
+        SuiteConfig.Link a = site.heroAction;
+        if (a == null) return "";
+        if (InstallerConfig.blank(a.label) || InstallerConfig.blank(a.url))
+            throw new InstallerException("'site.heroAction' needs a 'label' and a 'url'");
+        return "<a class=\"button ghost\" href=\"" + attr(a.url) + "\">" + html(a.label) + "</a>";
+    }
+
+    /** The logo's file, checked; null when the site names none. */
+    private static Path logo(SuiteConfig.Site site, Path baseDir) {
+        if (InstallerConfig.blank(site.logo)) return null;
+        Path p = Path.of(site.logo);
+        if (!p.isAbsolute()) p = baseDir.resolve(p);
+        if (!Files.isRegularFile(p)) throw new InstallerException("'site.logo' not found: " + p);
+        if (!p.getFileName().toString().toLowerCase(Locale.ROOT).matches(".*\\.(svg|png)"))
+            throw new InstallerException("'site.logo' must be an .svg or a .png: " + p);
+        return p;
     }
 
     private static String nav(SuiteConfig.Site site, String repo) {
