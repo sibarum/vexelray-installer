@@ -69,7 +69,7 @@ public final class WindowsTarget implements PlatformTarget {
             e.put("size", b.size());
             // an archive is unpacked into this folder; every other kind is the file itself
             e.put("installPath", b.isArchive() ? ("{installDir}\\" + sub).replaceAll("\\\\+$", "") : "{installDir}\\" + rel);
-            e.put("executable", !b.isArchive());
+            e.put("executable", !b.isArchive() && !b.isFile());
             if (b.isArchive() && bc.exposes != null && !bc.exposes.isEmpty()) {
                 ObjectNode ex = e.putObject("exposes");
                 bc.exposes.forEach((cmd, p2) -> ex.put(cmd, p2.replace('/', '\\')));
@@ -187,7 +187,7 @@ public final class WindowsTarget implements PlatformTarget {
         for (ResolvedBinary b : bins) {
             String sub = b.config().dir == null ? "" : b.config().dir.replaceAll("^[/\\\\]+|[/\\\\]+$", "");
             String rel = sub.isEmpty() ? b.file() : sub + "\\" + b.file();
-            String kindText = b.isJar() ? "Java uberjar" : b.isArchive() ? "archive (unpacked)" : "native executable";
+            String kindText = b.isJar() ? "Java uberjar" : b.isArchive() ? "archive (unpacked)" : b.isFile() ? "file" : "native executable";
             String where = b.isArchive() ? installDir + (sub.isEmpty() ? "" : "\\" + sub) + "\\" : installDir + "\\" + rel;
             table.add("| `" + b.file() + "` | " + kindText + " | "
                     + b.version() + " | " + String.format(Locale.ROOT, "%.1f", b.size() / 1048576.0) + " MB | `"

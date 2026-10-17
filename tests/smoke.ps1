@@ -47,6 +47,7 @@ try {
     Copy-Item "$env:windir\System32\where.exe" "$root\src\app.exe"
     [IO.File]::WriteAllText("$root\src\tool.jar", "not really a jar v1")
     Add-Type -AssemblyName System.Drawing
+    [IO.File]::WriteAllText("$root\src\NOTICES.txt", "third-party notices")
     $bmp = New-Object System.Drawing.Bitmap 32, 32; $bmp.Save("$root\src\doc.png", [System.Drawing.Imaging.ImageFormat]::Png); $bmp.Dispose()
     function SmokeConfig([bool]$toolAssoc) {
         $tool = @{ name = 'tool'; source = 'src/tool.jar'; javaMin = 17; shortcuts = @{ desktop = $true; label = 'ViSmoke Tool' } }
@@ -59,7 +60,8 @@ try {
             windows = @{ installDir = "$installDir"; binaries = @(
                 @{ name = 'app'; source = 'src/app.exe'; addToPath = $true; shortcuts = @{ desktop = $true; startMenu = $true; label = 'ViSmoke' }
                    fileAssociations = @(@{ extension = '.vismoke'; description = 'ViSmoke Project'; contentType = 'text/x-vismoke' }, $taken) },
-                $tool
+                $tool,
+                @{ name = 'notices'; source = 'src/NOTICES.txt' }
             ) }
         } | ConvertTo-Json -Depth 8 | Set-Content -Encoding ASCII "$root\installer.json"
     }
@@ -87,6 +89,8 @@ try {
     Check (Test-Path "$installDir\install-manifest.json") 'install-manifest.json written'
     $rec0 = Get-Content -Raw "$regDir\vi-smoke.json" | ConvertFrom-Json
     Check ($rec0.commands.app.path -eq "$installDir\app.exe") 'record lists native command path'
+    Check ((Get-Content -Raw "$installDir\NOTICES.txt") -eq 'third-party notices') 'a file is placed beside the binaries'
+    Check (-not $rec0.commands.notices -and @($rec0.files | Where-Object { $_.path -eq "$installDir\NOTICES.txt" }).Count -eq 1) 'a file is recorded but is not a command'
     Check ($rec0.commands.tool.path -eq "$installDir\tool.cmd") 'record lists jar launcher as command path'
     $desktop = [Environment]::GetFolderPath('Desktop')
     Check ((Test-Path "$desktop\ViSmoke.lnk") -and (Test-Path "$desktop\ViSmoke Tool.lnk")) 'desktop shortcuts'

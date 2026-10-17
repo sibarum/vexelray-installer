@@ -621,6 +621,7 @@ function ViInvokeInstall {
                 }
                 continue
             }
+            if ($s.Bin.kind -eq 'file') { continue }
             $run = if ($s.Bin.kind -eq 'jar') { ViExpand $s.Bin.launcher.Replace('{installDir}', $installDir) } else { $s.Target }
             $commands[$s.Bin.name] = [ordered]@{ path = $run; kind = $s.Bin.kind; version = $s.Bin.version }
         }

@@ -80,7 +80,7 @@ Defaults come from the project: `id` = artifactId, `name` = project name, `descr
 | `releasesRepo`, `tagFormat` | where binaries are downloaded from; defaults `repo` and `v{version}` |
 | `windows.installDir` | default `%LOCALAPPDATA%\Programs\{name}` |
 | `windows.registryDir` | where install manifests live; default `%LOCALAPPDATA%\vexelray-installer\installs` |
-| `windows.binaries[]` | `source` *or* `attached` (`main` or a classifier), `name`, `file`, `kind` (`native`/`jar`/`archive`, inferred from the extension; a `.zip` is an archive), `dir`, `version`, `addToPath`, `icon` (an `.ico`, or a square `.png` of 256px or more that is converted to one; used by the shortcuts and the Apps entry), `shortcuts {desktop, startMenu, label, gui}`, `javaMin` (jars), `jvmArgs[]` (jars; placed before `-jar`), `runtime` (jars; id of an install that provides `binjava.exe`, found through the registry at launch), `exposes` (archives; `{command: path-inside-zip}`, recorded under `commands`), `signedBy` + `signerThumbprint` (native exes; see Signing), `fileAssociations[] {extension, description, contentType, icon}` (not archives; see File associations) |
+| `windows.binaries[]` | `source` *or* `attached` (`main` or a classifier), `name`, `file`, `kind` (`native`/`jar`/`archive`/`file`, inferred from the extension; a `.zip` is an archive, and a `.txt`, `.md`, `.html`, `.pdf` or `.rtf` a file), `dir`, `version`, `addToPath`, `icon` (an `.ico`, or a square `.png` of 256px or more that is converted to one; used by the shortcuts and the Apps entry), `shortcuts {desktop, startMenu, label, gui}`, `javaMin` (jars), `jvmArgs[]` (jars; placed before `-jar`), `runtime` (jars; id of an install that provides `binjava.exe`, found through the registry at launch), `exposes` (archives; `{command: path-inside-zip}`, recorded under `commands`), `signedBy` + `signerThumbprint` (native exes; see Signing), `fileAssociations[] {extension, description, contentType, icon}` (not archives; see File associations) |
 | `windows.requires[]` | `{id, min}`: installs that must be present first. A binary's `runtime` is required implicitly. The installer refuses, before changing anything, if one is missing or older than `min`; the uninstaller warns when removing something another install still needs |
 | `outputDirectory`, `assetsDirectory` | default `target/installer` and `target/installer-assets` |
 | `notes`, `baseUrl`, `assetBaseUrl`, `skip` | release notes; URL overrides for testing; skip the goal |
@@ -212,6 +212,11 @@ GitHub Pages (**Settings > Pages > Deploy from a branch**).
   certificate works for testing: it is accepted only if it is exactly that certificate, with a warning
   that this machine does not trust it. The SHA-256 already guarantees the file is the published one;
   the signature adds who published it.
+- **Files** (`kind: file`, such as a licence or third-party notices) are downloaded, verified and placed like a
+  binary, and removed by updates that drop them and by the uninstaller, but nothing runs them: they are not
+  commands, and cannot set `addToPath`, `shortcuts`, `icon`, `fileAssociations`, `signedBy` or the jar options.
+  A third-party notices file belongs next to a native exe whose image has libraries compiled in:
+  `{ "name": "notices", "source": "THIRD-PARTY-NOTICES.txt" }`.
 - **Install manifest**: written to `<installDir>\install-manifest.json` and to
   `<registryDir>\<id>.json`: every file with path/kind/version/hash, shortcuts, PATH entries
   and registry keys. `commands.<name>.path` is how separately installed apps find and start

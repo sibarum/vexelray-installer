@@ -13,7 +13,11 @@ public final class BinaryConfig {
     public String attached;
     /** File name as installed and as uploaded to the release; defaults to the source's name. */
     public String file;
-    /** {@code native}, {@code jar} or {@code archive} (a .zip unpacked into {@code dir}); inferred from the extension. */
+    /**
+     * {@code native}, {@code jar}, {@code archive} (a .zip unpacked into {@code dir}) or {@code file} (placed as it is,
+     * never run: a licence or a readme); inferred from the extension, {@code .txt}, {@code .md}, {@code .html},
+     * {@code .htm}, {@code .pdf} and {@code .rtf} being files.
+     */
     public String kind;
     /** Sub-folder of the install dir. */
     public String dir;

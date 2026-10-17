@@ -31,6 +31,8 @@ public final class InstallerGenerator {
     private static final Pattern REPO = Pattern.compile("[\\w.-]+/[\\w.-]+");
     private static final Pattern EXTENSION = Pattern.compile("\\.[a-z0-9][a-z0-9_-]*");
     private static final Pattern MIME = Pattern.compile("[\\w.+-]+/[\\w.+-]+");
+    /** Files installed as they are, never run: licences, readmes. */
+    private static final Pattern DOCUMENT = Pattern.compile("(?i).+\\.(txt|md|html?|pdf|rtf)");
     /** Extensions Windows runs or treats as code; taking one over would change how it executes. */
     private static final java.util.Set<String> RESERVED_EXTENSIONS = java.util.Set.of(
             ".exe", ".com", ".bat", ".cmd", ".ps1", ".psm1", ".lnk", ".url", ".msi", ".msp", ".scr", ".pif", ".cpl",
@@ -246,9 +248,10 @@ public final class InstallerGenerator {
         if (!Files.isRegularFile(src)) throw new InstallerException("artifact not found: " + src);
         String file = InstallerConfig.blank(b.file) ? src.getFileName().toString() : b.file;
         String kind = InstallerConfig.blank(b.kind)
-                ? (file.endsWith(".jar") ? "jar" : file.endsWith(".zip") ? "archive" : "native") : b.kind;
-        if (!kind.equals("native") && !kind.equals("jar") && !kind.equals("archive"))
-            throw new InstallerException("binary kind must be 'native', 'jar' or 'archive', not '" + kind + "'");
+                ? (file.endsWith(".jar") ? "jar" : file.endsWith(".zip") ? "archive"
+                        : DOCUMENT.matcher(file).matches() ? "file" : "native") : b.kind;
+        if (!kind.equals("native") && !kind.equals("jar") && !kind.equals("archive") && !kind.equals("file"))
+            throw new InstallerException("binary kind must be 'native', 'jar', 'archive' or 'file', not '" + kind + "'");
         String name = InstallerConfig.blank(b.name) ? stem(file) : b.name;
         if (!InstallerConfig.blank(b.signedBy) && !kind.equals("native"))
             throw new InstallerException("'signedBy' only applies to native executables (" + file + ")");
@@ -256,6 +259,7 @@ public final class InstallerGenerator {
             throw new InstallerException("'signerThumbprint' needs 'signedBy' (" + file + ")");
         if (!InstallerConfig.blank(b.signerThumbprint) && !b.signerThumbprint.matches("(?i)[0-9a-f]{40}"))
             throw new InstallerException("'signerThumbprint' must be 40 hex characters (the certificate's SHA-1 thumbprint)");
+        if (kind.equals("file")) checkFile(b, file);
         if (kind.equals("archive")) checkArchive(b, src, file);
         else if (b.exposes != null && !b.exposes.isEmpty())
             throw new InstallerException("'exposes' only applies to archive binaries (" + file + ")");
@@ -313,6 +317,16 @@ public final class InstallerGenerator {
         IconFiles.toIco(source, istaged);
         return new ResolvedBinary.ResolvedIcon(iconFile, assetUrl(c, r, tag, iconFile),
                 sha256(istaged), Files.size(istaged), istaged);
+    }
+
+    /** A file is only placed: everything that would run it, or show it as a program, is refused. */
+    private static void checkFile(BinaryConfig b, String file) {
+        if (Boolean.TRUE.equals(b.addToPath) || b.shortcuts != null || !InstallerConfig.blank(b.icon)
+                || (b.fileAssociations != null && !b.fileAssociations.isEmpty()) || b.javaMin != null
+                || !InstallerConfig.blank(b.runtime) || (b.jvmArgs != null && !b.jvmArgs.isEmpty())
+                || (b.exposes != null && !b.exposes.isEmpty()))
+            throw new InstallerException("file '" + file + "' is only placed, so it cannot set addToPath, shortcuts, icon, "
+                    + "fileAssociations, javaMin, runtime, jvmArgs or exposes");
     }
 
     /** An archive is unpacked as-is, so only what makes no sense for a folder is refused here. */

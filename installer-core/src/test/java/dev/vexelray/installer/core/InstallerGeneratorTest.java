@@ -437,6 +437,52 @@ class InstallerGeneratorTest {
     }
 
     @Test
+    void aTextFileIsInferredAsAFileThatIsPlacedButNeverRun() throws IOException {
+        Files.writeString(src.resolve("NOTICES.txt"), "third-party notices");
+        runWith(c -> {
+            BinaryConfig n = new BinaryConfig();
+            n.source = "src/NOTICES.txt";
+            n.name = "notices";
+            c.windows.binaries.add(n);
+        });
+        JsonNode e = manifest().path("versions").get(0).path("platforms").path("windows").path("binaries").get(2);
+        assertEquals("file", e.path("kind").asText());
+        assertEquals("{installDir}\\NOTICES.txt", e.path("installPath").asText());
+        assertFalse(e.path("executable").asBoolean());
+        assertFalse(e.path("addToPath").asBoolean());
+        assertTrue(e.path("launcher").isMissingNode());
+        assertTrue(Files.readString(out.resolve("README.md")).contains("| `NOTICES.txt` | file |"));
+        // the installer skips files when it records commands
+        assertTrue(Files.readString(out.resolve("install.ps1")).contains("if ($s.Bin.kind -eq 'file') { continue }"));
+    }
+
+    @Test
+    void filesCannotBeRunOrShown() throws IOException {
+        Files.writeString(src.resolve("NOTICES.txt"), "third-party notices");
+        java.util.function.Consumer<java.util.function.Consumer<BinaryConfig>> bad = tweak -> assertThrows(InstallerException.class,
+                () -> runWith(c -> {
+                    BinaryConfig n = new BinaryConfig();
+                    n.source = "src/NOTICES.txt";
+                    tweak.accept(n);
+                    c.windows.binaries.add(n);
+                }));
+        bad.accept(n -> n.addToPath = true);
+        bad.accept(n -> n.shortcuts = new ShortcutConfig());
+        bad.accept(n -> n.signedBy = "CN=Example Inc");
+        bad.accept(n -> n.jvmArgs = java.util.List.of("-Xmx1g"));
+        bad.accept(n -> n.kind = "document");
+        // a declared kind wins over the extension
+        runWith(c -> {
+            BinaryConfig n = new BinaryConfig();
+            n.source = "src/NOTICES.txt";
+            n.kind = "native";
+            c.windows.binaries.add(n);
+        });
+        assertEquals("native", manifest().path("versions").get(0).path("platforms").path("windows")
+                .path("binaries").get(2).path("kind").asText());
+    }
+
+    @Test
     void aSignedNativeBinaryRecordsItsSignerInTheManifest() throws IOException {
         String thumb = "ab".repeat(20);
         runWith(c -> {

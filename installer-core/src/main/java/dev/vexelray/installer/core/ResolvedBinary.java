@@ -25,4 +25,5 @@ public record ResolvedBinary(
 
     public boolean isJar(){ return "jar".equals(kind); }
     public boolean isArchive() { return "archive".equals(kind); }
+    public boolean isFile() { return "file".equals(kind); }
 }
