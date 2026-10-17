@@ -12,7 +12,7 @@ SHA-256 in the [install manifest]({{MANIFEST_URL}}), and installs for your user 
 What it does:
 
 {{WHAT_IT_DOES}}
-
+{{REQUIREMENTS}}
 ### Options
 
 Set these in the same PowerShell window *before* the install command:
@@ -25,6 +25,7 @@ Set these in the same PowerShell window *before* the install command:
 | `$env:INSTALL_NO_PATH = '1'` | do not add anything to your user PATH |
 | `$env:INSTALL_NO_ASSOCIATIONS = '1'` | do not register {{NAME}} to open any file types |
 | `$env:INSTALL_FORCE = '1'` | reinstall even if this version is already installed |
+| `$env:INSTALL_SKIP_CHECKS = '1'` | install even if this computer does not meet the system requirements |
 
 Updates and reinstalls remember the `INSTALL_NO_*` choices of the last install. To get shortcuts,
 the PATH entry or file types back, set that variable to `'0'` and run the install command again.
@@ -53,6 +54,19 @@ as `cmd.exe /c path args...`.
 
 Checks GitHub for newer versions of the binaries and installs them after asking. Use
 `-Check` to only look, `-Yes` to skip the question.
+
+### Reporting a problem
+
+```powershell
+& "{{PS_INSTALL_DIR}}\diagnose.cmd"
+```
+
+Writes a report about this computer and prints where it is: Windows version, processor, memory, the displays
+(resolution, refresh rate, scaling, HDR), each GPU as DXGI / Direct3D 12 and as Vulkan see it, whether a
+flip-model swapchain can be created, the Vulkan present modes, implicit Vulkan layers, and what is installed.
+Nothing is sent anywhere; your user name is replaced by `%USERPROFILE%`. Read it, then attach it {{ISSUES}}.
+`-Copy` also puts it on the clipboard. Without installing, run `irm {{BASE_URL}}/diagnose.ps1 | iex`. A failed
+install writes the same report by itself.
 
 ### Uninstall
 

@@ -24,6 +24,8 @@ public final class InstallerConfig {
     public String releasesRepo;
     /** Release tag pattern; {@code {version}} is substituted. */
     public String tagFormat;
+    /** Where people report problems; the diagnostic report says to attach itself there. Defaults to the repo's new-issue page. */
+    public String issuesUrl;
 
     public PlatformConfig windows;
 
@@ -32,6 +34,10 @@ public final class InstallerConfig {
     public String publisherOrName() { return blank(publisher) ? name : publisher; }
     public String descriptionOrDefault() { return blank(description) ? name + "." : description; }
     public String releasesRepoOrRepo() { return blank(releasesRepo) ? repo : releasesRepo; }
+    public String issuesUrlOrDefault() {
+        if (!blank(issuesUrl)) return issuesUrl.trim();
+        return blank(repo) ? null : "https://github.com/" + repo + "/issues/new";
+    }
     public String repoPathTrimmed() {
         return blank(repoPath) ? "" : repoPath.replaceAll("^[/\\\\]+|[/\\\\]+$", "");
     }

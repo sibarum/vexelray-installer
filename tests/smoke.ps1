@@ -49,7 +49,7 @@ try {
     Add-Type -AssemblyName System.Drawing
     [IO.File]::WriteAllText("$root\src\NOTICES.txt", "third-party notices")
     $bmp = New-Object System.Drawing.Bitmap 32, 32; $bmp.Save("$root\src\doc.png", [System.Drawing.Imaging.ImageFormat]::Png); $bmp.Dispose()
-    function SmokeConfig([bool]$toolAssoc) {
+    function SmokeConfig([bool]$toolAssoc, $system = @{ windows = '10.0.10240'; memoryMb = 256 }) {
         $tool = @{ name = 'tool'; source = 'src/tool.jar'; javaMin = 17; shortcuts = @{ desktop = $true; label = 'ViSmoke Tool' } }
         if ($toolAssoc) { $tool.fileAssociations = @(@{ extension = 'vismokej' }) }
         $taken = @{ extension = '.vismoketaken' }
@@ -57,7 +57,7 @@ try {
         @{
             id = 'vi-smoke'; name = 'ViSmoke'; publisher = 'Test'; description = 'smoke'; version = '1.0.0'
             repo = 'o/r'; tagFormat = '{version}'
-            windows = @{ installDir = "$installDir"; binaries = @(
+            windows = @{ installDir = "$installDir"; system = $system; binaries = @(
                 @{ name = 'app'; source = 'src/app.exe'; addToPath = $true; shortcuts = @{ desktop = $true; startMenu = $true; label = 'ViSmoke' }
                    fileAssociations = @(@{ extension = '.vismoke'; description = 'ViSmoke Project'; contentType = 'text/x-vismoke' }, $taken) },
                 $tool,
@@ -65,6 +65,27 @@ try {
             ) }
         } | ConvertTo-Json -Depth 8 | Set-Content -Encoding ASCII "$root\installer.json"
     }
+    # ---- system requirements ---------------------------------------------------------------
+    Write-Host "requirements not met: nothing is installed"
+    SmokeConfig $true @{ memoryMb = 99999999 }
+    Build '1.0.0'
+    $out = powershell -NoProfile -ExecutionPolicy Bypass -File "$root\site\install.ps1" 2>&1 | Out-String
+    $out -split "`n" | ForEach-Object { if ($_.Trim()) { Write-Host "    | $($_.TrimEnd())" } }
+    Check ($out -match 'does not meet the system requirements') 'install refuses when a requirement is not met'
+    Check (-not (Test-Path "$installDir\app.exe") -and -not (Test-Path "$regDir\vi-smoke.json")) 'nothing was installed by the refused install'
+    $rep = Get-ChildItem "$root\diagnostics" -Filter 'vi-smoke-*.txt' -ErrorAction SilentlyContinue | Select-Object -First 1
+    Check ($rep -and (Get-Content -Raw $rep.FullName) -match '\[FAIL\] 99999999 MB of memory') 'the refusal leaves a report naming what is not met'
+    Check ($rep -and $out -match [regex]::Escape($rep.FullName)) 'and says where the report is'
+
+    Write-Host "a failed install writes a report"
+    SmokeConfig $true
+    Build '1.0.0'
+    [IO.File]::AppendAllText("$root\assets\1.0.0\app.exe", 'tampered')
+    $out = powershell -NoProfile -ExecutionPolicy Bypass -File "$root\site\install.ps1" 2>&1 | Out-String
+    Check ($out -match 'Checksum mismatch') 'a tampered download fails the install'
+    $rp = if ($out -match 'Diagnostic report: (\S[^\r\n]*\.txt)') { $Matches[1].Trim() } else { $null }
+    Check ($rp -and (Get-Content -Raw $rp) -match '== Install error\s+Checksum mismatch') 'the report written for the failure holds the error'
+
     SmokeConfig $true
     # an extension another program already owns: we may only join its Open with list
     New-Item -Path 'HKCU:\Software\Classes\.vismoketaken' -Force | Out-Null
@@ -85,6 +106,12 @@ try {
     Check (Test-Path "$installDir\tool.jar") 'tool.jar installed'
     Check ((Get-Content -Raw "$installDir\tool.cmd") -match 'java -jar') 'jar launcher written'
     Check ((Test-Path "$installDir\uninstall.cmd") -and (Test-Path "$installDir\update.cmd")) 'uninstall/update present'
+    Check ($out -match 'Checking system requirements' -and (Test-Path "$installDir\diagnose.cmd")) 'requirements checked, diagnose.cmd present'
+    $dout = & "$installDir\diagnose.cmd" -Out "$root\report.txt" 2>&1 | Out-String
+    $rtxt = Get-Content -Raw "$root\report.txt" -ErrorAction SilentlyContinue
+    Check ($rtxt -match 'ViSmoke - diagnostic report' -and $rtxt -match '== DXGI / Direct3D 12' -and $rtxt -match '== Vulkan') 'diagnose.cmd writes a full report'
+    Check ($rtxt -match 'vi-smoke\s+1\.0\.0' -and $rtxt -match '\[ok  \] 256 MB of memory') 'the report lists the install and its requirements'
+    Check ($rtxt -and -not $rtxt.Contains($env:USERPROFILE)) 'the report leaves out the user profile path'
     Check (Test-Path "$regDir\vi-smoke.json") 'registry manifest written'
     Check (Test-Path "$installDir\install-manifest.json") 'install-manifest.json written'
     $rec0 = Get-Content -Raw "$regDir\vi-smoke.json" | ConvertFrom-Json

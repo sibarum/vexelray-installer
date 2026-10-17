@@ -13,6 +13,7 @@
 #   INSTALL_NO_PATH=1          "
 #   INSTALL_NO_ASSOCIATIONS=1  "
 #   INSTALL_FORCE=1            "
+#   INSTALL_SKIP_CHECKS=1      "
 # INSTALL_VERSION and INSTALL_DIR name one application's version and folder, so they are not passed
 # on: run that application's own installer to use them.
 

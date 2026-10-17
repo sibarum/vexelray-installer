@@ -92,6 +92,7 @@ public final class InstallerGenerator {
                     throw new InstallerException("every 'requires' entry needs an 'id' (lowercase letters, digits, . _ -)");
                 if (!InstallerConfig.blank(rq.min)) Versions.parse(Versions.strip(rq.min));
             }
+            if (p.system != null) p.system.check();
             List<ResolvedBinary> bins = new ArrayList<>();
             java.util.Set<String> extensions = new java.util.HashSet<>();
             for (BinaryConfig b : p.binaries) {
@@ -129,7 +130,7 @@ public final class InstallerGenerator {
             String cfgJson = Json.compact(t.scriptConfig(c, t.configOf(c), manifestUrl)).replace("'", "''");
             for (String script : t.scriptNames()) {
                 String text = Templates.lf(Templates.render(t.key() + "/" + script, Map.of(
-                        "NAME", c.name, "CONFIG_JSON", cfgJson, "INSTALL_URL", installerUrl)));
+                        "NAME", c.name, "CONFIG_JSON", cfgJson, "INSTALL_URL", installerUrl, "BASE_URL", baseUrl)));
                 Path dest = r.outDir.resolve(script);
                 writeText(dest, text, true);
                 written.add(dest);

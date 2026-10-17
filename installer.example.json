@@ -13,6 +13,14 @@
 
   "windows": {
     "installDir": "%LOCALAPPDATA%\\Programs\\{name}",
+    "system": {
+      "windows": "10.0.19041",
+      "memoryMb": 4096,
+      "diskMb": 500,
+      "vulkan": "1.3",
+      "vulkanExtensions": [ "VK_KHR_swapchain", "VK_KHR_external_memory_win32", "VK_KHR_external_semaphore_win32" ],
+      "d3d12": "11_0"
+    },
     "binaries": [
       {
         "name": "myapp",

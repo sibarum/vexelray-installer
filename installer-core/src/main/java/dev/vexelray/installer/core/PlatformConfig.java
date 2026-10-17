@@ -12,4 +12,6 @@ public final class PlatformConfig {
     public List<BinaryConfig> binaries = new ArrayList<>();
     /** Installs that must be present first; a binary's {@code runtime} is required implicitly. */
     public List<Requirement> requires = new ArrayList<>();
+    /** What the computer must have; checked before anything large is downloaded. */
+    public SystemRequirements system;
 }

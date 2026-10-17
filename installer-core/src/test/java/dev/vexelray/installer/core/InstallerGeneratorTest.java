@@ -71,7 +71,7 @@ class InstallerGeneratorTest {
         GenerationResult res = run("1.0.0", "2026-01-01T00:00:00Z");
 
         assertEquals("irm https://raw.githubusercontent.com/owner/myapp/main/install.ps1 | iex", res.installCommand());
-        for (String f : new String[] {"install.ps1", "uninstall.ps1", "update.ps1", "manifest.json", "README.md"})
+        for (String f : new String[] {"install.ps1", "uninstall.ps1", "update.ps1", "diagnose.ps1", "manifest.json", "README.md"})
             assertTrue(Files.exists(out.resolve(f)), f);
 
         JsonNode m = manifest();
@@ -113,7 +113,7 @@ class InstallerGeneratorTest {
     void manifestHashesMatchTheScriptsOnDisk() throws IOException {
         run("1.0.0", "2026-01-01T00:00:00Z");
         JsonNode m = manifest();
-        for (String s : new String[] {"install.ps1", "uninstall.ps1", "update.ps1"}) {
+        for (String s : new String[] {"install.ps1", "uninstall.ps1", "update.ps1", "diagnose.ps1"}) {
             assertEquals(InstallerGenerator.sha256(out.resolve(s)), m.path("tools").path(s).path("sha256").asText(), s);
             assertEquals(m.path("tools").path(s).path("sha256").asText(),
                     m.path("versions").get(0).path("installer").path(s).asText());
@@ -123,7 +123,7 @@ class InstallerGeneratorTest {
     @Test
     void scriptsAreAsciiWithLfAndEmbedTheirConfig() throws IOException {
         run("1.0.0", "2026-01-01T00:00:00Z");
-        for (String s : new String[] {"install.ps1", "uninstall.ps1", "update.ps1"}) {
+        for (String s : new String[] {"install.ps1", "uninstall.ps1", "update.ps1", "diagnose.ps1"}) {
             byte[] bytes = Files.readAllBytes(out.resolve(s));
             for (byte b : bytes) assertTrue(b >= 0 && b != '\r', s + " has a non-ASCII byte or CR");
             String text = new String(bytes, StandardCharsets.US_ASCII);
@@ -248,6 +248,62 @@ class InstallerGeneratorTest {
         r.assetsDir = assets;
         r.baseDir = tmp;
         return new InstallerGenerator().generate(r);
+    }
+
+    static SystemRequirements system() {
+        SystemRequirements s = new SystemRequirements();
+        s.windows = "19041";
+        s.memoryMb = 4096;
+        s.vulkan = "1.3";
+        s.vulkanExtensions = java.util.List.of("VK_KHR_swapchain", "VK_KHR_external_memory_win32");
+        s.d3d12 = "11_0";
+        return s;
+    }
+
+    @Test
+    void systemRequirementsGoToTheManifestTheDiagnoseScriptAndTheReadme() throws IOException {
+        runWith(c -> c.windows.system = system());
+
+        JsonNode sys = manifest().path("versions").get(0).path("platforms").path("windows").path("requires").path("system");
+        assertEquals("10.0.19041", sys.path("windows").asText());
+        assertEquals(4096, sys.path("memoryMb").asInt());
+        assertEquals("1.3", sys.path("vulkan").asText());
+        assertEquals("VK_KHR_external_memory_win32", sys.path("vulkanExtensions").get(1).asText());
+        assertEquals("11_0", sys.path("d3d12").asText());
+        assertTrue(sys.path("diskMb").isMissingNode());
+
+        String diagnose = Files.readString(out.resolve("diagnose.ps1"));
+        assertTrue(diagnose.contains("\"system\":{\"windows\":\"10.0.19041\""));
+        assertTrue(diagnose.contains("\"issuesUrl\":\"https://github.com/owner/myapp/issues/new\""));
+        assertTrue(diagnose.contains("irm https://raw.githubusercontent.com/owner/myapp/main/diagnose.ps1 | iex"));
+
+        String readme = Files.readString(out.resolve("README.md"));
+        assertTrue(readme.contains("### System requirements"));
+        assertTrue(readme.contains("- Windows 10.0.19041 or newer"));
+        assertTrue(readme.contains("- a GPU with Vulkan 1.3 with `VK_KHR_swapchain`, `VK_KHR_external_memory_win32` and Direct3D 12 feature level 11_0, all on the same GPU"));
+        assertTrue(readme.contains("diagnose.cmd"));
+        assertTrue(readme.contains("[your bug report](https://github.com/owner/myapp/issues/new)"));
+    }
+
+    @Test
+    void withoutSystemRequirementsNothingIsChecked() throws IOException {
+        runWith(c -> { c.windows.system = new SystemRequirements(); c.issuesUrl = "https://example.com/bugs"; });
+        assertTrue(manifest().path("versions").get(0).path("platforms").path("windows").path("requires").path("system").isMissingNode());
+        assertFalse(Files.readString(out.resolve("README.md")).contains("### System requirements"));
+        assertTrue(Files.readString(out.resolve("install.ps1")).contains("\"issuesUrl\":\"https://example.com/bugs\""));
+    }
+
+    @Test
+    void refusesMalformedSystemRequirements() {
+        java.util.function.Consumer<java.util.function.Consumer<SystemRequirements>> bad = tweak -> assertThrows(InstallerException.class,
+                () -> runWith(c -> { c.windows.system = system(); tweak.accept(c.windows.system); }));
+        bad.accept(s -> s.windows = "Windows 10");
+        bad.accept(s -> s.vulkan = "1.3.0");
+        bad.accept(s -> s.vulkan = "2");
+        bad.accept(s -> s.vulkanExtensions = java.util.List.of("swapchain"));
+        bad.accept(s -> s.d3d12 = "12");
+        bad.accept(s -> s.memoryMb = 0);
+        bad.accept(s -> s.diskMb = -1);
     }
 
     static FileAssociation assoc(String ext) {

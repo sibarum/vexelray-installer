@@ -4,7 +4,7 @@ Turns a native-image executable and/or a compiled uberjar into a one-line instal
 from a public GitHub repo.
 
 ```
-your build ──► installer:generate ──► install.ps1  uninstall.ps1  update.ps1  manifest.json  README.md
+your build ──► installer:generate ──► install.ps1  uninstall.ps1  update.ps1  diagnose.ps1  manifest.json  README.md
                                   └─► staged artifacts ──► installer:publish ──► GitHub release
 ```
 
@@ -57,7 +57,7 @@ A complete example is in [tests/maven-sample](tests/maven-sample/pom.xml).
 2. `mvn package installer:publish` also creates the GitHub release `v<version>` and uploads the
    artifacts (token in `$GITHUB_TOKEN`, or the variable named by `-Dinstaller.tokenEnv`). Add
    `-Dinstaller.dryRun` to see what would be uploaded. `publish` is never bound to a phase.
-3. Commit `install.ps1`, `uninstall.ps1`, `update.ps1`, `manifest.json` and `README.md` from
+3. Commit `install.ps1`, `uninstall.ps1`, `update.ps1`, `diagnose.ps1`, `manifest.json` and `README.md` from
    `target/installer/` to the project repo (or point `outputDirectory` at a checkout of it).
    The README contains the one-liner:
    ```powershell
@@ -78,10 +78,12 @@ Defaults come from the project: `id` = artifactId, `name` = project name, `descr
 | `id`, `name`, `publisher`, `description`, `version` | metadata; `id` is lowercase letters, digits, `. _ -` |
 | `repo`, `branch`, `repoPath` | where the generated files are committed (`repoPath` for a subfolder); branch defaults to `main` |
 | `releasesRepo`, `tagFormat` | where binaries are downloaded from; defaults `repo` and `v{version}` |
+| `issuesUrl` | where people report problems; the diagnostic report says to attach itself there. Default: `https://github.com/<repo>/issues/new` |
 | `windows.installDir` | default `%LOCALAPPDATA%\Programs\{name}` |
 | `windows.registryDir` | where install manifests live; default `%LOCALAPPDATA%\vexelray-installer\installs` |
 | `windows.binaries[]` | `source` *or* `attached` (`main` or a classifier), `name`, `file`, `kind` (`native`/`jar`/`archive`/`file`, inferred from the extension; a `.zip` is an archive, and a `.txt`, `.md`, `.html`, `.pdf` or `.rtf` a file), `dir`, `version`, `addToPath`, `icon` (an `.ico`, or a square `.png` of 256px or more that is converted to one; used by the shortcuts and the Apps entry), `shortcuts {desktop, startMenu, label, gui}`, `javaMin` (jars), `jvmArgs[]` (jars; placed before `-jar`), `runtime` (jars; id of an install that provides `binjava.exe`, found through the registry at launch), `exposes` (archives; `{command: path-inside-zip}`, recorded under `commands`), `signedBy` + `signerThumbprint` (native exes; see Signing), `fileAssociations[] {extension, description, contentType, icon}` (not archives; see File associations) |
 | `windows.requires[]` | `{id, min}`: installs that must be present first. A binary's `runtime` is required implicitly. The installer refuses, before changing anything, if one is missing or older than `min`; the uninstaller warns when removing something another install still needs |
+| `windows.system` | what the computer must have: `windows` (oldest version, `10.0.19041` or a build number), `memoryMb`, `diskMb` (free on the install drive), `vulkan` (`1.3`), `vulkanExtensions[]`, `d3d12` (feature level, `11_0` to `12_2`). The GPU fields must all be met by one GPU: its Vulkan device, and the DXGI adapter with the same LUID. See Diagnostics |
 | `outputDirectory`, `assetsDirectory` | default `target/installer` and `target/installer-assets` |
 | `notes`, `baseUrl`, `assetBaseUrl`, `skip` | release notes; URL overrides for testing; skip the goal |
 
@@ -123,7 +125,7 @@ Commit both to `repo`/`repoPath`. The suite's `install.ps1` installs nothing its
 listed order, it fetches the member's published `manifest.json`, downloads the member's own `install.ps1`,
 refuses it unless it matches the SHA-256 the manifest records (`tools.install.ps1`), and runs it. A member
 whose manifest is not published yet is skipped and reported. `INSTALL_ONLY=a,b` limits the run to some
-members. `INSTALL_NO_SHORTCUTS`, `INSTALL_NO_PATH`, `INSTALL_NO_ASSOCIATIONS` and `INSTALL_FORCE` pass through to
+members. `INSTALL_NO_SHORTCUTS`, `INSTALL_NO_PATH`, `INSTALL_NO_ASSOCIATIONS`, `INSTALL_FORCE` and `INSTALL_SKIP_CHECKS` pass through to
 every member; `INSTALL_VERSION` and `INSTALL_DIR` name one application, so they are set aside. `page`
 (optional) links a member's name on the install page; `manifestUrl` (optional) overrides the URL derived from
 the member's `repo`, `branch` and `repoPath`.
@@ -186,8 +188,22 @@ GitHub Pages (**Settings > Pages > Deploy from a branch**).
   registers file types, optionally edits the user PATH, and registers an Apps & features entry.
   Nothing is written to the install dir until every download has verified. Options:
   `INSTALL_VERSION`, `INSTALL_DIR`, `INSTALL_NO_SHORTCUTS`, `INSTALL_NO_PATH`,
-  `INSTALL_NO_ASSOCIATIONS`, `INSTALL_FORCE`. The `NO_*` choices in effect are stored in the
+  `INSTALL_NO_ASSOCIATIONS`, `INSTALL_FORCE`, `INSTALL_SKIP_CHECKS`. The `NO_*` choices in effect are stored in the
   install record (`options`), and updates and reinstalls keep them; `INSTALL_NO_*=0` opts back in.
+- **diagnose.ps1** (`diagnose.cmd`) checks the computer against `windows.system` and writes a text report
+  for bug reports to `<registryDir>\..\diagnostics\<id>-<time>.txt` (the last ten are kept; `-Out`, `-Copy`,
+  `-Json`): Windows edition and build, processor, memory, disk, GPU scheduling, power; each display's
+  resolution, refresh rate (current and highest), scaling and HDR state; every DXGI adapter with its LUID,
+  memory and Direct3D 12 feature level, and whether a flip-discard swapchain on a D3D12 queue (what
+  `dxgi-bridge` presents through) and a 10-bit HDR10 one can be created; every Vulkan device with its API and
+  driver version, LUID, memory, queues, present modes, surface formats and extensions; implicit Vulkan layers,
+  Vulkan and Java environment variables, the other installs and their per-program GPU preferences. The user's
+  profile path and name are replaced before writing. The native calls (DXGI, D3D12, Vulkan) run in a separate
+  `powershell.exe` with a 60 second limit, so a crashing or hanging driver is reported instead of taking the
+  installer down. `install.ps1` downloads it first and, when the version has `windows.system`, refuses before
+  downloading anything else if a requirement is not met (unless `INSTALL_SKIP_CHECKS=1`); a requirement it
+  could not check is a warning. Any failed install writes a report with the error and prints where it is and
+  `issuesUrl`. It also runs on its own: `irm <base>/diagnose.ps1 | iex`.
 - **File associations** are per user (`HKCU\Software\Classes`, no admin rights). Each extension
   gets a ProgID `<id>.<ext>` whose open command passes the file as the last argument: `"app.exe"
   "%1"`, and for a jar `javaw` (or the `.cmd` launcher when `shortcuts.gui` is false). The binary

@@ -39,6 +39,7 @@ These are passed on to every application's installer:
 | `$env:INSTALL_NO_PATH = '1'` | do not add anything to your user PATH |
 | `$env:INSTALL_NO_ASSOCIATIONS = '1'` | do not register any application to open file types |
 | `$env:INSTALL_FORCE = '1'` | reinstall even where the latest version is already installed |
+| `$env:INSTALL_SKIP_CHECKS = '1'` | install even where this computer does not meet an application's system requirements |
 
 A particular version or folder applies to one application, so this script ignores `INSTALL_VERSION` and
 `INSTALL_DIR`. To use them, run that application's own installer.

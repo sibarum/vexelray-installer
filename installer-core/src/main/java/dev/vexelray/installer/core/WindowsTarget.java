@@ -17,7 +17,7 @@ public final class WindowsTarget implements PlatformTarget {
 
     @Override public PlatformConfig configOf(InstallerConfig config) { return config.windows; }
 
-    @Override public List<String> scriptNames() { return List.of("install.ps1", "uninstall.ps1", "update.ps1"); }
+    @Override public List<String> scriptNames() { return List.of("install.ps1", "uninstall.ps1", "update.ps1", "diagnose.ps1"); }
 
     @Override
     public ObjectNode scriptConfig(InstallerConfig c, PlatformConfig p, String manifestUrl) {
@@ -27,6 +27,10 @@ public final class WindowsTarget implements PlatformTarget {
         n.put("publisher", c.publisherOrName());
         n.put("manifestUrl", manifestUrl);
         n.put("registryDir", registryDir(p));
+        String issues = c.issuesUrlOrDefault();
+        if (issues != null) n.put("issuesUrl", issues);
+        // diagnose.ps1 run by itself checks against these; the installer checks against the version it installs
+        if (p.system != null && !p.system.isEmpty()) n.set("system", systemNode(p.system));
         return n;
     }
 
@@ -126,8 +130,10 @@ public final class WindowsTarget implements PlatformTarget {
             }
             binaries.add(e);
         }
-        if (javaMin >= 0 || !needs.isEmpty()) {
+        boolean system = p.system != null && !p.system.isEmpty();
+        if (javaMin >= 0 || !needs.isEmpty() || system) {
             ObjectNode req = platform.putObject("requires");
+            if (system) req.set("system", systemNode(p.system));
             if (javaMin >= 0) req.put("java", javaMin);
             if (!needs.isEmpty()) {
                 ArrayNode installs = req.putArray("installs");
@@ -140,6 +146,20 @@ public final class WindowsTarget implements PlatformTarget {
         }
         platform.set("binaries", binaries);
         return platform;
+    }
+
+    static ObjectNode systemNode(SystemRequirements s) {
+        ObjectNode n = Json.object();
+        if (!InstallerConfig.blank(s.windows)) n.put("windows", s.windowsVersion());
+        if (s.memoryMb != null) n.put("memoryMb", s.memoryMb);
+        if (s.diskMb != null) n.put("diskMb", s.diskMb);
+        if (!InstallerConfig.blank(s.vulkan)) n.put("vulkan", s.vulkan.trim());
+        if (s.vulkanExtensions != null && !s.vulkanExtensions.isEmpty()) {
+            ArrayNode e = n.putArray("vulkanExtensions");
+            s.vulkanExtensions.forEach(e::add);
+        }
+        if (!InstallerConfig.blank(s.d3d12)) n.put("d3d12", s.d3d12.trim());
+        return n;
     }
 
     private static void iconEntry(ObjectNode ic, ResolvedBinary.ResolvedIcon icon, String sub) {
@@ -200,11 +220,23 @@ public final class WindowsTarget implements PlatformTarget {
                     + " must be installed and on your PATH (or set `JAVA_HOME`). A `<name>.cmd` launcher is created for each jar.\n";
         }
 
+        String requirements = "";
+        if (p.system != null && !p.system.isEmpty()) {
+            requirements = "\n### System requirements\n\n"
+                    + String.join("\n", p.system.describe().stream().map(l -> "- " + l).toList())
+                    + "\n\nThe installer checks these before it downloads anything large and stops if one is not met. "
+                    + "To install anyway, set `$env:INSTALL_SKIP_CHECKS = '1'`.\n";
+        }
+        String issues = c.issuesUrlOrDefault();
+
         return Templates.render("windows/README.section.md", Map.ofEntries(
+                Map.entry("REQUIREMENTS", requirements),
+                Map.entry("ISSUES", issues == null ? "with your bug report" : "to [your bug report](" + issues + ")"),
                 Map.entry("NAME", c.name),
                 Map.entry("VERSION", rc.version()),
                 Map.entry("INSTALL_COMMAND", installCommand(rc.installerUrl())),
                 Map.entry("INSTALL_URL", rc.installerUrl()),
+                Map.entry("BASE_URL", rc.installerUrl().replaceAll("/[^/]+$", "")),
                 Map.entry("MANIFEST_URL", rc.manifestUrl()),
                 Map.entry("WHAT_IT_DOES", String.join("\n", what)),
                 Map.entry("BINARY_TABLE", String.join("\n", table)),

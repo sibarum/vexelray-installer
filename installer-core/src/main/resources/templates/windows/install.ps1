@@ -9,11 +9,12 @@
 #   INSTALL_NO_PATH=1        do not add anything to the user PATH
 #   INSTALL_NO_ASSOCIATIONS=1  do not register file types
 #   INSTALL_FORCE=1          reinstall even if this version is already installed
+#   INSTALL_SKIP_CHECKS=1    install even if this computer does not meet the system requirements
 #
 # Updates and reinstalls keep the NO_* choices of the last install; set one to 0 to opt back in.
 #
 # The same options are accepted as arguments when the script is run from a file:
-#   -Version 1.2.3  -Dir C:\some\dir  -NoShortcuts  -NoPath  -NoAssociations  -Force
+#   -Version 1.2.3  -Dir C:\some\dir  -NoShortcuts  -NoPath  -NoAssociations  -Force  -SkipChecks
 
 $InstallerCfg = '{{CONFIG_JSON}}' | ConvertFrom-Json
 
@@ -297,7 +298,7 @@ function ViOptOut([bool]$switch, [string]$envValue, $stored) {
 }
 
 function ViInvokeInstall {
-    param([string]$Version, [string]$Dir, [switch]$NoShortcuts, [switch]$NoPath, [switch]$NoAssociations, [switch]$Force)
+    param([string]$Version, [string]$Dir, [switch]$NoShortcuts, [switch]$NoPath, [switch]$NoAssociations, [switch]$Force, [switch]$SkipChecks)
     $ErrorActionPreference = 'Stop'
     $ProgressPreference = 'SilentlyContinue'
     $id = $InstallerCfg.id
@@ -363,7 +364,37 @@ function ViInvokeInstall {
     $tmp = Join-Path ([IO.Path]::GetTempPath()) ("install-" + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $tmp | Out-Null
     try {
-        # 1. download + verify everything before touching the install directory
+        # 1. download + verify everything before touching the install directory; the tools come first, as
+        # diagnose.ps1 checks the system requirements before anything large is downloaded
+        $tools = @()
+        foreach ($tn in 'uninstall.ps1', 'update.ps1', 'diagnose.ps1') {
+            $t = $manifest.tools.$tn
+            if (-not $t) { continue }
+            $dl = Join-Path $tmp $tn
+            Invoke-WebRequest -UseBasicParsing -Uri $t.url -OutFile $dl
+            if ((ViSha $dl) -ne $t.sha256) { throw "Checksum mismatch for $tn downloaded from $($t.url). Nothing was installed." }
+            $tools += [pscustomobject]@{ Name = $tn; Temp = $dl; Sha = $t.sha256 }
+            if ($tn -eq 'diagnose.ps1') { $ViState.DiagText = [IO.File]::ReadAllText($dl) }
+        }
+        if ($ViState.DiagText -and $plat.requires.system) {
+            ViStep "Checking system requirements"
+            $chk = $null
+            try {
+                $chk = & ([scriptblock]::Create($ViState.DiagText)) -Check -Requires ($plat.requires.system | ConvertTo-Json -Compress -Depth 5) `
+                    -InstallDir $installDir -Installing $entry.version | Select-Object -Last 1
+            } catch { Write-Warning "The system check could not run: $($_.Exception.Message)" }
+            if ($chk) {
+                foreach ($c in @($chk.unknown)) { Write-Warning "Could not check: $($c.check) ($($c.found))" }
+                foreach ($c in @($chk.failed)) { Write-Host "    Not met: $($c.check)`n             found: $($c.found)" -ForegroundColor Red }
+                if ($chk.ok) { ViInfo "Met" }
+                elseif ($SkipChecks) { Write-Warning "Installing anyway, as INSTALL_SKIP_CHECKS is set. $appName may not start or may misbehave." }
+                else {
+                    $ViState.Report = $chk.report
+                    throw "This computer does not meet the system requirements of $appName. Nothing was installed. Set INSTALL_SKIP_CHECKS=1 to install anyway."
+                }
+            }
+        }
+
         ViStep "Downloading $appName $($entry.version)"
         $staged = @()
         foreach ($b in $bins) {
@@ -430,16 +461,6 @@ function ViInvokeInstall {
             ViCheckSignature $dl $b.signature $b.file
             $staged += [pscustomobject]@{ Bin = $b; Target = $target; Temp = $dl; Icon = $ic; FileIcons = $fic }
         }
-        $tools = @()
-        foreach ($tn in 'uninstall.ps1', 'update.ps1') {
-            $t = $manifest.tools.$tn
-            if (-not $t) { continue }
-            $dl = Join-Path $tmp $tn
-            Invoke-WebRequest -UseBasicParsing -Uri $t.url -OutFile $dl
-            if ((ViSha $dl) -ne $t.sha256) { throw "Checksum mismatch for $tn downloaded from $($t.url). Nothing was installed." }
-            $tools += [pscustomobject]@{ Name = $tn; Temp = $dl; Sha = $t.sha256 }
-        }
-
         # 2. place files
         ViStep "Installing to $installDir"
         ViEnsureDir $installDir
@@ -679,6 +700,7 @@ function ViInvokeInstall {
         Write-Host "    Manifest:  $recPath"
         Write-Host "    Update:    $(Join-Path $installDir 'update.cmd')"
         Write-Host "    Uninstall: $uninstallCmd   (or Settings > Apps)"
+        if ($tools | Where-Object { $_.Name -eq 'diagnose.ps1' }) { Write-Host "    Diagnose:  $(Join-Path $installDir 'diagnose.cmd')   (a report to attach to bug reports)" }
         if ($pathEntries.Count -gt 0) { Write-Host "    Open a new terminal for PATH changes to take effect." }
         return $true
     } finally {
@@ -698,13 +720,26 @@ for ($ViI = 0; $ViI -lt $args.Count; $ViI++) {
         '^-NoPath$' { $ViArgs.NoPath = $true }
         '^-NoAssociations$' { $ViArgs.NoAssociations = $true }
         '^-Force$' { $ViArgs.Force = $true }
+        '^-SkipChecks$' { $ViArgs.SkipChecks = $true }
         default { Write-Warning "Ignoring unknown argument: $($args[$ViI])" }
     }
 }
+if ($env:INSTALL_SKIP_CHECKS -and $env:INSTALL_SKIP_CHECKS -ne '0') { $ViArgs.SkipChecks = $true }
 $ViOk = $false
+# what ViInvokeInstall leaves for a failure report: diagnose.ps1's text, and the report if one was written
+$ViState = @{ DiagText = $null; Report = $null }
 try {
     $ViOk = [bool](ViInvokeInstall @ViArgs | Select-Object -Last 1)
 } catch {
-    Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
+    $ViErr = $_.Exception.Message
+    Write-Host "ERROR: $ViErr" -ForegroundColor Red
+    if ($ViState.DiagText -and -not $ViState.Report) {
+        Write-Host "Writing a diagnostic report..."
+        try { $ViState.Report = (& ([scriptblock]::Create($ViState.DiagText)) -Check -InstallError $ViErr | Select-Object -Last 1).report } catch { }
+    }
+    if ($ViState.Report) {
+        Write-Host "Diagnostic report: $($ViState.Report)" -ForegroundColor Yellow
+        if ($InstallerCfg.issuesUrl) { Write-Host "To report the problem, attach it at $($InstallerCfg.issuesUrl)" }
+    }
 }
 if (-not $ViOk -and $PSCommandPath) { exit 1 }

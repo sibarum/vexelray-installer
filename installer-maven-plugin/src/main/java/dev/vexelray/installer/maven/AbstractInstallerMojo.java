@@ -59,6 +59,10 @@ abstract class AbstractInstallerMojo extends AbstractMojo {
     @Parameter(property = "installer.tagFormat", defaultValue = "v{version}")
     String tagFormat;
 
+    /** Where people report problems; defaults to the repo's new-issue page. */
+    @Parameter(property = "installer.issuesUrl")
+    String issuesUrl;
+
     /** The Windows installer: install folder and the binaries to ship. */
     @Parameter
     PlatformConfig windows;
@@ -97,6 +101,7 @@ abstract class AbstractInstallerMojo extends AbstractMojo {
         c.repoPath = repoPath;
         c.releasesRepo = releasesRepo;
         c.tagFormat = tagFormat;
+        c.issuesUrl = issuesUrl;
         c.windows = windows;
         if (windows != null && windows.binaries != null) {
             for (BinaryConfig b : windows.binaries) resolveAttached(b);
