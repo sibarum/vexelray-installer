@@ -145,6 +145,8 @@ so the command is short and the first thing people find:
     "logo": "site/mark.svg",
     "heroAction": { "label": "What it is built on", "url": "https://owner.github.io/tech.html" },
     "links": [ { "label": "Docs", "url": "https://owner.github.io/docs/" } ],
+    "footerLinks": [ { "label": "Licenses", "url": "https://owner.github.io/licenses.html" } ],
+    "notice": "Small print at the foot of the page, such as trademark notices.",
     "sections": [
       {
         "id": "build", "title": "Build your own", "nav": "Developers",
@@ -172,7 +174,8 @@ command with a copy button (and `site.heroAction` as a button under it), a card 
 folders, shortcuts, the commands added to `PATH` and the applications that register file types. Each of
 `site.sections` goes between the members and those details, as a title, a paragraph, a row of cards (a card's `url`
 is optional, and so is its `stat`, a figure set large above its title) and an optional button, and gets a header link (`nav`, or its `title`) to its `id`. Text in the config
-may use `` `code` ``; everything else is escaped. The members' manifests stay where their own runs published them,
+may use `` `code` ``; everything else is escaped. `site.footerLinks` go in the footer after the source link, and
+`site.notice` is set in small print under them. The members' manifests stay where their own runs published them,
 so installs and updaters are the same whichever command installed them. Publish the folder from its repo's root with
 GitHub Pages (**Settings > Pages > Deploy from a branch**).
 

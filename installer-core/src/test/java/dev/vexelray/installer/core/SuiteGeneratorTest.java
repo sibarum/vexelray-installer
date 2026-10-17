@@ -341,6 +341,27 @@ class SuiteGeneratorTest {
     }
 
     @Test
+    void footerLinksAndANotice() throws IOException {
+        SuiteConfig s = siteSuite();
+        SuiteConfig.Link licenses = new SuiteConfig.Link();
+        licenses.label = "Licenses";
+        licenses.url = "https://owner.github.io/licenses.html";
+        s.site.footerLinks.add(licenses);
+        s.site.notice = "Thing is a trademark of `Owner` & co.";
+        site(s);
+
+        String page = Files.readString(out.resolve("index.html"), StandardCharsets.UTF_8);
+        assertTrue(page.contains(" &middot; <a href=\"https://owner.github.io/licenses.html\">Licenses</a></p>"));
+        assertTrue(page.contains("<p class=\"legal\">Thing is a trademark of <code>Owner</code> &amp; co.</p>"));
+
+        SuiteConfig half = siteSuite();
+        half.site.footerLinks.add(new SuiteConfig.Link());
+        out = tmp.resolve("site/other");
+        assertThrows(InstallerException.class, () -> site(half));
+        assertFalse(Files.exists(out.resolve("install.ps1")), "a bad footer link is caught before anything is written");
+    }
+
+    @Test
     void refusesAMissingScreenshot() throws IOException {
         SuiteConfig s = siteSuite();
         s.members.get(1).image = "nope.png";

@@ -63,6 +63,10 @@ public final class SuiteConfig {
         public Link heroAction;
         /** Links in the page header, in order. */
         public List<Link> links = new ArrayList<>();
+        /** Links in the footer, in order, such as a page of licenses. */
+        public List<Link> footerLinks = new ArrayList<>();
+        /** Optional small print at the foot of the page, such as trademark notices. */
+        public String notice;
         /** Sections of the suite's own between the members and the install details, in order; each is in the header too. */
         public List<Section> sections = new ArrayList<>();
     }
