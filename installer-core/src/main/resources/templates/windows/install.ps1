@@ -27,9 +27,9 @@ $InstallerCfg = '{{CONFIG_JSON}}' | ConvertFrom-Json
 function ViUiLog([string]$m) {
     if ($ViUi -and -not $ViUi.Closed) { $ViUi.Log.AppendText("$m`r`n"); [Windows.Forms.Application]::DoEvents() }
 }
-function ViUiBar([int]$pct) {
-    if (-not $ViUi -or $ViUi.Closed) { return }
-    if ($pct -lt 0) { $ViUi.Bar.Style = 'Marquee' } else { $ViUi.Bar.Style = 'Continuous'; $ViUi.Bar.Value = [Math]::Min(100, $pct) }
+function ViUiBar([int]$pct, $ui = $ViUi) {
+    if (-not $ui -or $ui.Closed) { return }
+    if ($pct -lt 0) { $ui.Bar.Style = 'Marquee' } else { $ui.Bar.Style = 'Continuous'; $ui.Bar.Value = [Math]::Min(100, $pct) }
 }
 function ViStep([string]$m) {
     Write-Host "==> $m" -ForegroundColor Cyan
@@ -610,10 +610,13 @@ function ViUiFinish([bool]$ok, [string]$err) {
 }
 
 # Invoke-WebRequest -OutFile, or with a window a chunked download that shows its progress, keeps the
-# window responsive and stops when Cancel is pressed.
+# window responsive and stops when Cancel is pressed. Without a window of its own, the window is the one a
+# suite installer running this one quietly leaves in $ViHostUi, if any (with the same Status, Bar and Action).
 function ViDownload([string]$url, [string]$out, [string]$label) {
-    if (-not $ViUi -or $ViUi.Closed) { Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $out; return }
-    $ViUi.Status.Text = "Downloading $label"
+    $ui = $ViUi
+    if (-not $ui -and $ViHostUi -and -not $ViHostUi.Closed) { $ui = $ViHostUi }
+    if (-not $ui -or $ui.Closed) { Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $out; return }
+    $ui.Status.Text = "Downloading $label"
     [Windows.Forms.Application]::DoEvents()
     $req = [Net.WebRequest]::Create($url)
     $req.UserAgent = 'vexelray-installer'
@@ -625,7 +628,7 @@ function ViDownload([string]$url, [string]$out, [string]$label) {
         try {
             $buf = New-Object byte[] 262144
             $done = 0L; $shown = -1
-            ViUiBar $(if ($total -gt 0) { 0 } else { -1 })
+            ViUiBar $(if ($total -gt 0) { 0 } else { -1 }) $ui
             while (($n = $in.Read($buf, 0, $buf.Length)) -gt 0) {
                 $fs.Write($buf, 0, $n)
                 $done += $n
@@ -633,12 +636,12 @@ function ViDownload([string]$url, [string]$out, [string]$label) {
                     $pct = [int](100 * $done / $total)
                     if ($pct -ne $shown) {
                         $shown = $pct
-                        ViUiBar $pct
-                        $ViUi.Status.Text = "Downloading {0} ({1:N1} of {2:N1} MB)" -f $label, ($done / 1MB), ($total / 1MB)
+                        ViUiBar $pct $ui
+                        $ui.Status.Text = "Downloading {0} ({1:N1} of {2:N1} MB)" -f $label, ($done / 1MB), ($total / 1MB)
                     }
                 }
                 [Windows.Forms.Application]::DoEvents()
-                if ($ViUi.Action -eq 'secondary') { $ViState.Cancelled = $true; throw 'Cancelled. Nothing was installed.' }
+                if ($ui.Action -eq 'secondary') { $ViState.Cancelled = $true; throw 'Cancelled. Nothing was installed.' }
             }
         } finally { $fs.Dispose(); $in.Dispose() }
     } finally { $resp.Close() }

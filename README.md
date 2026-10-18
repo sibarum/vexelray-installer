@@ -19,8 +19,8 @@ per platform; macOS and Linux arrive as new `PlatformTarget`s with their own tem
 | `installer-maven-plugin` | Goals `installer:generate` and `installer:publish`. |
 
 Build and test everything: `mvn install` (Java 21+). End to end on Windows:
-`powershell -File tests\smoke.ps1`. The installer window: `powershell -File tests\window.ps1` (drives it
-with the mouse, so it needs an unlocked desktop).
+`powershell -File tests\smoke.ps1`. The installer windows: `powershell -File tests\window.ps1` and
+`powershell -File tests\suite-window.ps1` (they drive them with the mouse, so they need an unlocked desktop).
 
 ## Use from Maven
 
@@ -127,7 +127,22 @@ listed order, it fetches the member's published `manifest.json`, downloads the m
 refuses it unless it matches the SHA-256 the manifest records (`tools.install.ps1`), and runs it. A member
 whose manifest is not published yet is skipped and reported. `INSTALL_ONLY=a,b` limits the run to some
 members. `INSTALL_NO_SHORTCUTS`, `INSTALL_NO_PATH`, `INSTALL_NO_ASSOCIATIONS`, `INSTALL_FORCE` and `INSTALL_SKIP_CHECKS` pass through to
-every member; `INSTALL_VERSION` and `INSTALL_DIR` name one application, so they are set aside. `page`
+every member; `INSTALL_VERSION` and `INSTALL_DIR` name one application, so they are set aside.
+
+Run from a console a person is at, the suite installer opens one window, under the same rules as an
+application's (`INSTALL_QUIET=1` or `-Quiet`, `CI`, `-NonInteractive` or redirected output keep it in the
+console). It first reads every member's manifest, then shows a box for each member with the version it would
+install (and the installed one), ticking those in `INSTALL_ONLY`, or else those not installed or out of
+date; a member that is not published yet is shown but cannot be ticked. Below them, shortcut, PATH and
+file-type boxes (only those some member has) apply to every member: they start from `INSTALL_NO_*`, or else
+from the members' last installs, and when those disagree the box starts indeterminate, which leaves each
+member its own choice. Install then shows a row per member (waiting, installing, installed, failed, not
+selected, not published yet), a status line and bar, and the log the console gets; the end page names what
+was installed and what was not, with **Open report** when a member wrote a diagnostic report. The members'
+installers still run quietly inside it, in the same process: their output is copied into the log, and their
+downloads show their progress in the suite's window, where Cancel stops them (a member already placing its
+files finishes, and the rest are not started). Unmet system requirements are refused rather than asked about,
+as in any quiet install; `INSTALL_SKIP_CHECKS=1` installs anyway. `page`
 (optional) links a member's name on the install page; `manifestUrl` (optional) overrides the URL derived from
 the member's `repo`, `branch` and `repoPath`.
 
@@ -196,7 +211,8 @@ GitHub Pages (**Settings > Pages > Deploy from a branch**).
   log the console gets, then **Start** (the first shortcut), or for a failure the error, **Open report** and a
   link to `issuesUrl`. Unmet system requirements are asked about rather than refused, and Cancel stops any
   time before files are placed. `INSTALL_QUIET=1` (`-Quiet`), `CI`, `-NonInteractive` or redirected output
-  keep it in the console; `update.ps1` and suite installs always run their installers quietly.
+  keep it in the console; `update.ps1` and suite installs always run their installers quietly (a suite has a
+  window of its own; see Suites).
 - **diagnose.ps1** (`diagnose.cmd`) checks the computer against `windows.system` and writes a text report
   for bug reports to `<registryDir>\..\diagnostics\<id>-<time>.txt` (the last ten are kept; `-Out`, `-Copy`,
   `-Json`): Windows edition and build, processor, memory, disk, GPU scheduling, power; each display's
@@ -274,4 +290,6 @@ mvn test                           # generator, versions, GitHub publisher (agai
 powershell -File tests\parse.ps1   # the PowerShell templates parse
 powershell -File tests\smoke.ps1   # build, install via irm|iex, update, uninstall against a local server
 powershell -File tests\suite-smoke.ps1   # a suite of three: INSTALL_ONLY, unpublished and tampered members
+powershell -File tests\window.ps1        # the installer window, through UI Automation (moves the mouse)
+powershell -File tests\suite-window.ps1  # the suite window: pick members, cancel, a tampered member, stop a download
 ```

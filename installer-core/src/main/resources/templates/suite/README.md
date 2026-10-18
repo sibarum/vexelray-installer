@@ -10,7 +10,9 @@ Open **PowerShell** (a normal window - administrator rights are not needed) and 
 {{INSTALL_COMMAND}}
 ```
 
-That installs every application below, for your user only. Each one is a separate install with its own
+A window opens where you choose which of the applications below to install, and whether they get
+shortcuts, PATH entries and file types; it then shows each one's progress. That installs them for your
+user only. Each one is a separate install with its own
 folder, its own entry in **Settings > Apps**, and its own updater and uninstaller, so you can remove one
 and keep the others. Running the same line again updates each of them to its latest version.
 
@@ -23,7 +25,8 @@ not been published yet is skipped and reported.
 
 ### Only some of them
 
-Set `INSTALL_ONLY` in the same PowerShell window *before* the install command:
+Untick the others in the window. Without the window (see below), set `INSTALL_ONLY` in the same PowerShell
+window *before* the install command; with it, `INSTALL_ONLY` says which boxes start ticked:
 
 ```powershell
 $env:INSTALL_ONLY = '{{EXAMPLE_IDS}}'
@@ -40,6 +43,9 @@ These are passed on to every application's installer:
 | `$env:INSTALL_NO_ASSOCIATIONS = '1'` | do not register any application to open file types |
 | `$env:INSTALL_FORCE = '1'` | reinstall even where the latest version is already installed |
 | `$env:INSTALL_SKIP_CHECKS = '1'` | install even where this computer does not meet an application's system requirements |
+| `$env:INSTALL_QUIET = '1'` | no window: ask nothing and report in this PowerShell window only |
+
+With the window, the first three set how its boxes start.
 
 A particular version or folder applies to one application, so this script ignores `INSTALL_VERSION` and
 `INSTALL_DIR`. To use them, run that application's own installer.

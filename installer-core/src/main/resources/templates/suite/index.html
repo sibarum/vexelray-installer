@@ -199,14 +199,14 @@
           <ul>
 {{CHANGES}}
           </ul>
-          <p>To leave some of that out, set any of these in the same PowerShell window before the install line:</p>
+          <p>The window that opens has a box for each of these. To start them unticked, or to leave them out when the installer runs without a window, set any of these in the same PowerShell window before the install line:</p>
           <div class="cmd plain"><code id="opt-shortcuts">$env:INSTALL_NO_SHORTCUTS = '1'</code><button class="copy" type="button" data-copy="opt-shortcuts">Copy</button></div>
           <div class="cmd plain"><code id="opt-path">$env:INSTALL_NO_PATH = '1'</code><button class="copy" type="button" data-copy="opt-path">Copy</button></div>
           <div class="cmd plain"><code id="opt-assoc">$env:INSTALL_NO_ASSOCIATIONS = '1'</code><button class="copy" type="button" data-copy="opt-assoc">Copy</button></div>
         </details>
         <details id="only-some">
           <summary>Install only some of them</summary>
-          <p>Set <code>INSTALL_ONLY</code> in the same PowerShell window before the install line:</p>
+          <p>Untick the others in the window that opens. To choose ahead of it, or without a window, set <code>INSTALL_ONLY</code> in the same PowerShell window before the install line:</p>
           <div class="cmd plain"><code id="only">$env:INSTALL_ONLY = '{{EXAMPLE_IDS}}'</code><button class="copy" type="button" data-copy="only">Copy</button></div>
           <p>The ids are {{ID_LIST}}.</p>
         </details>
