@@ -89,6 +89,22 @@ try {
     $o = Run "irm $base/suite/install.ps1 | iex"
     Check ((Rec 'vi-sa').version -eq '1.1.0') 'vi-sa updated to 1.1.0'
 
+    Write-Host "a preflight suite installs the versions it pins, even over themselves"
+    [IO.File]::AppendAllText("$root\src\app.exe", "y")
+    Gen @('--config', "$root\vi-sa.json", '--version', '1.2.0-SNAPSHOT', '--out', "$root\site-vi-sa", '--assets', "$root\assets-vi-sa",
+          '--base-url', "$base/site-vi-sa", '--asset-base-url', "$base/assets-vi-sa")
+    $pinned = Get-Content -Raw "$root\suite.json" | ConvertFrom-Json
+    $pinned.members[0] | Add-Member version '1.2.0-SNAPSHOT'
+    $pinned.members[1] | Add-Member version '2.0.0-SNAPSHOT'   # never published
+    $pinned | ConvertTo-Json -Depth 6 | Set-Content -Encoding ASCII "$root\preflight.json"
+    Gen @('--suite', "$root\preflight.json", '--out', "$root\preflight", '--base-url', "$base/preflight")
+    $o = Run "`$env:INSTALL_ONLY = 'vi-sa,vi-sb'; irm $base/preflight/install.ps1 | iex"
+    Check ((Rec 'vi-sa').version -eq '1.2.0-SNAPSHOT') 'vi-sa at its pinned snapshot, not its latest'
+    Check ($o -match 'VI-SB 2\.0\.0-SNAPSHOT has not been published yet' -and (Rec 'vi-sb').version -eq '1.0.0') 'a pin not published is skipped and reported'
+    $o = Run "`$env:INSTALL_ONLY = 'vi-sa'; irm $base/preflight/install.ps1 | iex; 'LEFT=[' + `$env:INSTALL_VERSION + `$env:INSTALL_FORCE + ']'"
+    Check ($o -notmatch 'already installed' -and (Rec 'vi-sa').version -eq '1.2.0-SNAPSHOT') 'run again, the pinned snapshot is reinstalled'
+    Check ($o -match 'LEFT=\[\]') 'and INSTALL_VERSION and INSTALL_FORCE are not left set'
+
     Write-Host "a member installer that does not match its manifest is not run"
     Add-Content -LiteralPath "$root\site-vi-sb\install.ps1" -Value "# tampered"
     $env:INSTALL_FORCE = '1'

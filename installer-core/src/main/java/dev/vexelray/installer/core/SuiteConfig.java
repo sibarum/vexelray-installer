@@ -34,6 +34,11 @@ public final class SuiteConfig {
         public String page;
         /** Overrides the manifest URL derived from the member's own repo (testing, or other hosting). */
         public String manifestUrl;
+        /**
+         * Optional: install exactly this version rather than the manifest's {@code latest}, always (a snapshot is
+         * rebuilt under the same version). For a preflight suite of snapshot builds.
+         */
+        public String version;
         /** Optional screenshot for the landing page, relative to the suite config. */
         public String image;
         /** What the screenshot shows, for readers who can't see it. */

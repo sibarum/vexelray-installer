@@ -16,7 +16,8 @@
 #   INSTALL_SKIP_CHECKS=1      "
 #   INSTALL_QUIET=1            no window: ask nothing and report in the console only
 # INSTALL_VERSION and INSTALL_DIR name one application's version and folder, so they are not passed
-# on: run that application's own installer to use them.
+# on: run that application's own installer to use them. An application this script pins to a version
+# (a preflight of snapshot builds) is installed at that version, and reinstalled even when it is current.
 #
 # Run from a console a person is at, the installer opens one window: a box for each application (those in
 # INSTALL_ONLY, or else those not installed or out of date, are ticked) and the shortcut, PATH and file-type
@@ -99,6 +100,21 @@ function SuiteFetchManifest($m, [string]$tmp) {
     $manifest
 }
 
+# The version to install: the member's pinned version (a preflight suite of snapshot builds), or else the
+# manifest's latest. $null when the manifest does not list the pinned version.
+function SuiteWant($m, $manifest) {
+    if (-not $m.version) { return $manifest.latest }
+    if (@($manifest.versions | Where-Object { $_.version -eq $m.version }).Count -gt 0) { return $m.version }
+    return $null
+}
+
+# Whether the window's check found the member (or its pinned version) not published. $manifests may be $null.
+function SuiteUnpublished($m, $manifests) {
+    if (-not $manifests -or -not $manifests.ContainsKey($m.id)) { return $false }
+    $mf = $manifests[$m.id]
+    -not $mf -or -not (SuiteWant $m $mf)
+}
+
 # A member installer's console output, shown in the console as it would be and copied into the window;
 # its steps become the status line.
 function SuiteEcho($o, [string]$who) {
@@ -135,6 +151,11 @@ function SuiteInstallOne($m, [string]$tmp, $manifests) {
             SuiteSay "    $($m.name) has not been published yet; skipped." Yellow
             return 'unpublished'
         }
+        $want = SuiteWant $m $manifest
+        if (-not $want) {
+            SuiteSay "    $($m.name) $($m.version) has not been published yet; skipped." Yellow
+            return 'unpublished'
+        }
         $tool = $manifest.tools.'install.ps1'
         if (-not $tool -or -not $tool.url -or -not $tool.sha256) { throw "the manifest names no install.ps1" }
         $script = "$tmp\$($m.id).install.ps1"
@@ -147,9 +168,17 @@ function SuiteInstallOne($m, [string]$tmp, $manifests) {
         # window it shows its downloads there ($ViHostUi), and its output is copied into the window's log.
         $ViHostUi = $SuiteUi
         $sb = [scriptblock]::Create([IO.File]::ReadAllText($script))
-        if ($SuiteUi) { & $sb 6>&1 3>&1 | ForEach-Object { SuiteEcho $_ $m.name } | Out-Null }
-        else { $null = & $sb }
-        if ((SuiteRecordVersion $m) -eq $manifest.latest) { return 'installed' }
+        # A pinned version is installed even over itself: a snapshot is rebuilt under the same version.
+        $force = $env:INSTALL_FORCE
+        if ($m.version) { $env:INSTALL_VERSION = $want; $env:INSTALL_FORCE = '1' }
+        try {
+            if ($SuiteUi) { & $sb 6>&1 3>&1 | ForEach-Object { SuiteEcho $_ $m.name } | Out-Null }
+            else { $null = & $sb }
+        } finally {
+            [Environment]::SetEnvironmentVariable('INSTALL_VERSION', $null, 'Process')
+            [Environment]::SetEnvironmentVariable('INSTALL_FORCE', $force, 'Process')
+        }
+        if ((SuiteRecordVersion $m) -eq $want) { return 'installed' }
         return 'failed'
     } catch {
         SuiteSay "ERROR: $($m.name): $($_.Exception.Message)" Red
@@ -387,14 +416,17 @@ function SuiteUiOptions($members, $manifests, [string[]]$only) {
         }
         $mf = $manifests[$m.id]
         if (-not $mf) { $info.Text = 'not published yet'; $cb.Checked = $false; $cb.Enabled = $false; continue }
+        $want = SuiteWant $m $mf
+        if (-not $want) { $info.Text = "$($m.version) not published yet"; $cb.Checked = $false; $cb.Enabled = $false; continue }
         $published++
-        $entry = @($mf.versions) | Where-Object { $_.version -eq $mf.latest } | Select-Object -First 1
+        $entry = @($mf.versions) | Where-Object { $_.version -eq $want } | Select-Object -First 1
         $mb = @($entry.platforms.windows.binaries | Where-Object { $_ })
         $bins += @($mb | ForEach-Object { [pscustomobject]@{ App = $m.name; Bin = $_ } })
-        if (-not $rec) { $info.Text = "$($mf.latest)" }
-        elseif ($rec.version -eq $mf.latest) { $info.Text = "$($mf.latest), installed"; $current++ }
-        else { $info.Text = "$($mf.latest) (installed: $($rec.version))" }
-        if ($only) { $cb.Checked = $only -contains $m.id } else { $cb.Checked = -not $rec -or $rec.version -ne $mf.latest }
+        if (-not $rec) { $info.Text = "$want" }
+        elseif ($rec.version -eq $want) { $info.Text = "$want, installed"; if (-not $m.version) { $current++ } }
+        else { $info.Text = "$want (installed: $($rec.version))" }
+        # a pinned version is ticked even when installed: it may have been rebuilt since
+        if ($only) { $cb.Checked = $only -contains $m.id } else { $cb.Checked = -not $rec -or $rec.version -ne $want -or [bool]$m.version }
     }
     $ui.Title.Text = "Install $($SuiteCfg.name)"
     $ui.Sub.Text = if ($published -gt 0 -and $current -eq $published) { 'Everything is installed and up to date. Tick an application to reinstall it.' }
@@ -454,7 +486,7 @@ function SuiteUiOptions($members, $manifests, [string[]]$only) {
     [Environment]::SetEnvironmentVariable('INSTALL_FORCE', '1', 'Process')
     foreach ($m in $members) {
         if ($ids -contains $m.id) { SuiteUiRow $m 'waiting' }
-        elseif ($manifests.ContainsKey($m.id) -and -not $manifests[$m.id]) { SuiteUiRow $m 'not published yet' }
+        elseif (SuiteUnpublished $m $manifests) { SuiteUiRow $m 'not published yet' }
         else { SuiteUiRow $m 'not selected' }
     }
     SuiteUiPage $ui 'progress'
@@ -575,7 +607,7 @@ function SuiteInstall([bool]$quiet) {
         SuiteSay "Installing $($SuiteCfg.name): $(($members | Where-Object { $chosen -contains $_.id } | ForEach-Object { $_.name }) -join ', ')"
         foreach ($m in $members) {
             if ($chosen -notcontains $m.id) {
-                $r = if ($manifests.ContainsKey($m.id) -and -not $manifests[$m.id]) { 'unpublished' } else { 'skipped' }
+                $r = if (SuiteUnpublished $m $manifests) { 'unpublished' } else { 'skipped' }
                 $results += [pscustomobject]@{ Member = $m; Result = $r }
                 continue
             }

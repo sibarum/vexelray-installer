@@ -102,6 +102,39 @@ class SuiteGeneratorTest {
     }
 
     @Test
+    void aPinnedVersionGoesIntoTheScriptAndTheReadme() throws IOException {
+        SuiteConfig s = suite();
+        s.members.get(0).version = "v0.2.0-SNAPSHOT";
+        generate(s);
+
+        String script = Files.readString(out.resolve("install.ps1"), StandardCharsets.UTF_8);
+        assertTrue(script.contains("\"version\":\"0.2.0-SNAPSHOT\""), "the pin, without its v");
+        assertEquals(1, script.split("\"version\":", -1).length - 1, "only the pinned member has one");
+        String readme = Files.readString(out.resolve("README.md"), StandardCharsets.UTF_8);
+        assertTrue(readme.contains("| Application | What it is | Id | Version | Installed to |"));
+        assertTrue(readme.contains("| `editor` | `0.2.0-SNAPSHOT` |"));
+        assertTrue(readme.contains("| `explorer` | latest |"));
+        assertTrue(readme.contains("installs these versions again"));
+        assertFalse(readme.contains("{{"));
+    }
+
+    @Test
+    void withoutPinsTheReadmeHasNoVersionColumn() throws IOException {
+        generate(suite());
+        String readme = Files.readString(out.resolve("README.md"), StandardCharsets.UTF_8);
+        assertTrue(readme.contains("| Application | What it is | Id | Installed to |"));
+        assertTrue(readme.contains("updates each of them to its latest version"));
+    }
+
+    @Test
+    void refusesAPinThatIsNotAVersion() {
+        SuiteConfig s = suite();
+        s.members.get(1).version = "1.0'; rm";
+        InstallerException e = assertThrows(InstallerException.class, () -> generate(s));
+        assertTrue(e.getMessage().contains("explorer"), e.getMessage());
+    }
+
+    @Test
     void refusesAMemberListedTwice() {
         SuiteConfig s = suite();
         s.members.get(1).config = "editor.json";

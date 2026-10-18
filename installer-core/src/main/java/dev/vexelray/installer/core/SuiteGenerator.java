@@ -34,7 +34,7 @@ import java.util.regex.Pattern;
 public final class SuiteGenerator {
 
     /** One member, read from its installer.json. */
-    private record Resolved(InstallerConfig config, SuiteConfig.Member member, String manifestUrl, Path configDir) {}
+    private record Resolved(InstallerConfig config, SuiteConfig.Member member, String manifestUrl, Path configDir, String version) {}
 
     /**
      * @param baseDir member {@code config} paths are resolved against this (the suite config's folder)
@@ -71,27 +71,33 @@ public final class SuiteGenerator {
         String installUrl = baseUrl + "/install.ps1";
         writeScript(s, members, outDir, installUrl);
 
+        boolean pinned = members.stream().anyMatch(r -> r.version != null);
         List<String> table = new ArrayList<>();
-        table.add("| Application | What it is | Id | Installed to |");
-        table.add("| --- | --- | --- | --- |");
+        table.add("| Application | What it is | Id |" + (pinned ? " Version |" : "") + " Installed to |");
+        table.add("| --- | --- | --- |" + (pinned ? " --- |" : "") + " --- |");
         for (Resolved r : members) {
             String name = InstallerConfig.blank(r.member.page) ? r.config.name : "[" + r.config.name + "](" + r.member.page + ")";
-            table.add("| " + name + " | " + r.config.descriptionOrDefault() + " | `" + r.config.id + "` | `"
-                    + WindowsTarget.installDir(r.config, r.config.windows) + "` |");
+            String version = !pinned ? "" : (r.version == null ? "latest" : "`" + r.version + "`") + " | ";
+            table.add("| " + name + " | " + r.config.descriptionOrDefault() + " | `" + r.config.id + "` | " + version
+                    + "`" + WindowsTarget.installDir(r.config, r.config.windows) + "` |");
         }
         Resolved first = members.get(0);
-        String readme = Templates.render("suite/README.md", Map.of(
-                "NAME", s.name,
-                "DESCRIPTION", InstallerConfig.blank(s.description) ? "" : s.description.trim() + "\n",
-                "SITE_LINE", s.site == null || InstallerConfig.blank(s.site.url) ? ""
-                        : "\nThe install page is " + s.site.url.replaceAll("/+$", "") + ", which installs with a shorter command.\n",
-                "INSTALL_COMMAND", "irm " + installUrl + " | iex",
-                "INSTALL_URL", installUrl,
-                "MEMBER_TABLE", String.join("\n", table),
-                "EXAMPLE_IDS", exampleIds(members),
-                "PS_EXAMPLE_DIR", WindowsTarget.powershellPath(WindowsTarget.installDir(first.config, first.config.windows)),
-                "EXAMPLE_ID", first.config.id,
-                "REGISTRY_DIR", WindowsTarget.registryDir(first.config.windows)));
+        Map<String, String> vars = new HashMap<>();
+        vars.put("NAME", s.name);
+        vars.put("DESCRIPTION", InstallerConfig.blank(s.description) ? "" : s.description.trim() + "\n");
+        vars.put("SITE_LINE", s.site == null || InstallerConfig.blank(s.site.url) ? ""
+                : "\nThe install page is " + s.site.url.replaceAll("/+$", "") + ", which installs with a shorter command.\n");
+        vars.put("INSTALL_COMMAND", "irm " + installUrl + " | iex");
+        vars.put("INSTALL_URL", installUrl);
+        vars.put("MEMBER_TABLE", String.join("\n", table));
+        vars.put("RERUN", pinned
+                ? "Running the same line again installs these versions again, so a rebuilt snapshot replaces the one installed."
+                : "Running the same line again updates each of them to its latest version.");
+        vars.put("EXAMPLE_IDS", exampleIds(members));
+        vars.put("PS_EXAMPLE_DIR", WindowsTarget.powershellPath(WindowsTarget.installDir(first.config, first.config.windows)));
+        vars.put("EXAMPLE_ID", first.config.id);
+        vars.put("REGISTRY_DIR", WindowsTarget.registryDir(first.config.windows));
+        String readme = Templates.render("suite/README.md", vars);
         Path readmePath = outDir.resolve("README.md");
         if (Files.exists(readmePath)
                 && !Files.readString(readmePath, StandardCharsets.UTF_8).contains(InstallerGenerator.README_MARKER)) {
@@ -197,7 +203,14 @@ public final class SuiteGenerator {
             if (!ids.add(c.id)) throw new InstallerException("the suite lists '" + c.id + "' twice");
             String manifestUrl = !InstallerConfig.blank(m.manifestUrl) ? m.manifestUrl
                     : InstallerGenerator.baseUrl(c.repo, c.branchOrDefault(), c.repoPathTrimmed(), null) + "/manifest.json";
-            members.add(new Resolved(c, m, manifestUrl, p.toAbsolutePath().getParent()));
+            String version = null;
+            if (!InstallerConfig.blank(m.version)) {
+                version = m.version.trim().replaceFirst("^[vV]", "");
+                // it goes into the script inside a quoted string, and into INSTALL_VERSION
+                if (!version.matches("[0-9A-Za-z][0-9A-Za-z.+-]*"))
+                    throw new InstallerException("'" + m.version + "' (the version for " + c.id + ") is not a version");
+            }
+            members.add(new Resolved(c, m, manifestUrl, p.toAbsolutePath().getParent(), version));
         }
         return members;
     }
@@ -212,6 +225,7 @@ public final class SuiteGenerator {
             n.put("name", r.config.name);
             n.put("manifestUrl", r.manifestUrl);
             n.put("registryDir", WindowsTarget.registryDir(r.config.windows));
+            if (r.version != null) n.put("version", r.version);
         }
         String idList = String.join(", ", members.stream().map(r -> r.config.id).toList());
 

@@ -14,7 +14,7 @@ A window opens where you choose which of the applications below to install, and 
 shortcuts, PATH entries and file types; it then shows each one's progress. That installs them for your
 user only. Each one is a separate install with its own
 folder, its own entry in **Settings > Apps**, and its own updater and uninstaller, so you can remove one
-and keep the others. Running the same line again updates each of them to its latest version.
+and keep the others. {{RERUN}}
 
 {{MEMBER_TABLE}}
 

@@ -144,7 +144,11 @@ downloads show their progress in the suite's window, where Cancel stops them (a 
 files finishes, and the rest are not started). Unmet system requirements are refused rather than asked about,
 as in any quiet install; `INSTALL_SKIP_CHECKS=1` installs anyway. `page`
 (optional) links a member's name on the install page; `manifestUrl` (optional) overrides the URL derived from
-the member's `repo`, `branch` and `repoPath`.
+the member's `repo`, `branch` and `repoPath`. `version` (optional) pins the member: the suite installs that
+version instead of the manifest's `latest`, and reinstalls it even when it is the one installed, since a snapshot is
+rebuilt under the same version. A suite whose members are all pinned to snapshots is a preflight: every snapshot
+built together, installable with one command while the public command keeps installing the releases. The install
+page then lists each member's version.
 
 ### A landing page
 
