@@ -11,7 +11,7 @@
 # at a time, and follows it through the "##vi" event lines it prints (INSTALL_EVENTS=1). A failed run is
 # rolled back by the installer's journal, whatever happens to this window.
 #
-#   manager.cmd                    open the window
+#   manager.cmd                    open the window (in Edge, as an app; -Forms for the plain Windows one)
 #   manager.cmd -List              list the installs and whether a newer version is published
 #   manager.cmd -Update <id>       update one in the console; -UpdateAll updates every one that is behind
 #   manager.cmd -Remove <id>       remove one in the console
@@ -534,6 +534,395 @@ function ViRunWindow {
     $f.Dispose()
 }
 
+# ---- Edge front end --------------------------------------------------------------------
+# The same model, shown by Microsoft Edge in app mode (a window without browser chrome) from a page this
+# script serves on 127.0.0.1. Only this computer can reach it, and only with the random token in its path:
+# requests must name exactly that host and port (so a web page cannot reach it through DNS rebinding), and
+# changes must be POSTs from the page's own origin with an X-Vi header (which a form or another site cannot
+# send without a preflight this server never answers). Edge runs with a profile of its own, so the process
+# started here is that window; when it closes, or the page stops polling, the manager ends (after a change
+# that is placing files has finished).
+
+function ViFindEdge {
+    $c = @(
+        (Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe'),
+        (Join-Path $env:ProgramFiles 'Microsoft\Edge\Application\msedge.exe'),
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\Edge\Application\msedge.exe'))
+    foreach ($p in $c) { if ($p -and (Test-Path -LiteralPath $p)) { return $p } }
+    try {
+        $k = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe' -ErrorAction Stop).'(default)'
+        if ($k -and (Test-Path -LiteralPath $k)) { return $k }
+    } catch { }
+    $null
+}
+
+function ViStateJson([string]$title) {
+    $apps = @()
+    foreach ($a in $M.Apps.Values) {
+        $o = $a.Record.options
+        $apps += [ordered]@{
+            id = $a.Id; name = $a.Name; version = [string]$a.Record.version; latest = $a.Latest; state = $a.State; message = $a.Message
+            dir = $a.Record.installDir; hasManifest = [bool]$a.Manifest
+            options = [ordered]@{ noShortcuts = [bool]$o.noShortcuts; noPath = [bool]$o.noPath; noAssociations = [bool]$o.noAssociations }
+            choices = ViChoices $a $a.Record.version
+        }
+    }
+    $job = if ($M.Job) { [ordered]@{ id = $M.Job.Id; kind = $M.Job.Kind; phase = $M.Job.Phase } } else { $null }
+    $log = @($M.Log.ToArray() | Select-Object -Last 300)
+    $canCancel = [bool]($M.Job -and $M.Job.Phase -ne 'busy') -or $M.Queue.Count -gt 0
+    ([ordered]@{ rev = $M.Rev; title = $title; apps = $apps; job = $job; status = $M.Status; progress = $M.Progress; canCancel = $canCancel; log = $log }) |
+        ConvertTo-Json -Depth 6 -Compress
+}
+
+function ViSend($ctx, [int]$code, [string]$type, [string]$text) {
+    try {
+        $r = $ctx.Response
+        $r.StatusCode = $code
+        $r.ContentType = $type
+        $r.Headers['Cache-Control'] = 'no-store'
+        $r.Headers['X-Content-Type-Options'] = 'nosniff'
+        $b = [Text.Encoding]::UTF8.GetBytes($text)
+        $r.ContentLength64 = $b.Length
+        $r.OutputStream.Write($b, 0, $b.Length)
+        $r.Close()
+    } catch { try { $ctx.Response.Abort() } catch { } }
+}
+
+function ViReadBody($ctx) {
+    $sr = New-Object IO.StreamReader($ctx.Request.InputStream, [Text.Encoding]::UTF8)
+    try { $t = $sr.ReadToEnd() } finally { $sr.Dispose() }
+    if (-not $t) { return $null }
+    $t | ConvertFrom-Json
+}
+
+function ViServe($ctx, $srv) {
+    $req = $ctx.Request
+    if ([string]$req.Headers['Host'] -ne $srv.Host) { ViSend $ctx 403 'text/plain' 'Forbidden'; return }
+    $path = $req.Url.AbsolutePath.Substring($srv.Token.Length + 1)
+    if ($req.HttpMethod -eq 'GET') {
+        if ($path -eq '/' -or $path -eq '') {
+            $ctx.Response.Headers['Content-Security-Policy'] = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'"
+            ViSend $ctx 200 'text/html; charset=utf-8' $srv.Page
+            return
+        }
+        if ($path -eq '/api/state') {
+            $srv.Seen = [DateTime]::Now; $srv.Bye = $null
+            $have = -2
+            [void][int]::TryParse([string]$req.QueryString['rev'], [ref]$have)
+            if ($have -ne $M.Rev) { ViSend $ctx 200 'application/json' (ViStateJson $srv.Title) }
+            else { $srv.Pending.Add([pscustomobject]@{ Ctx = $ctx; Rev = $have; Until = [DateTime]::Now.AddSeconds(15) }) }
+            return
+        }
+        ViSend $ctx 404 'text/plain' 'Not found'
+        return
+    }
+    if ($req.HttpMethod -ne 'POST' -or [string]$req.Headers['Origin'] -ne "http://$($srv.Host)") { ViSend $ctx 403 'text/plain' 'Forbidden'; return }
+    if ($path -eq '/api/bye') { $srv.Bye = [DateTime]::Now; ViSend $ctx 200 'application/json' '{}'; return }
+    if ([string]$req.Headers['X-Vi'] -ne '1') { ViSend $ctx 403 'text/plain' 'Forbidden'; return }
+    try { $body = ViReadBody $ctx } catch { ViSend $ctx 400 'text/plain' 'Bad request'; return }
+    switch ($path) {
+        '/api/act' {
+            $close = [bool]$body.closeApps
+            switch ([string]$body.kind) {
+                'all' { ViUpdateAll $close }
+                'check' { ViLoad @('*') }
+                'cancel' { ViCancel }
+                { $_ -in 'update', 'change', 'remove' } { ViEnqueue ([string]$body.kind) ([string]$body.id) $body.options $close }
+                default { ViSend $ctx 400 'text/plain' 'Unknown action'; return }
+            }
+            ViSend $ctx 200 'application/json' '{"ok":true}'
+        }
+        '/api/running' {
+            $a = $M.Apps[[string]$body.id]
+            $names = @()
+            if ($a) { $names = @(ViRunningFrom $a.Record.installDir | ForEach-Object { "$($_.Name) (process $($_.ProcessId))" }) }
+            ViSend $ctx 200 'application/json' (ConvertTo-Json -Compress @{ names = $names })
+        }
+        default { ViSend $ctx 404 'text/plain' 'Not found' }
+    }
+}
+
+function ViRunEdge([string]$edge) {
+    $title = if ($InstallerCfg.publisher) { "$($InstallerCfg.publisher) apps" } else { 'Installed apps' }
+    $l = New-Object Net.HttpListener
+    $port = 0
+    for ($try = 0; $try -lt 10 -and -not $l.IsListening; $try++) {
+        $port = Get-Random -Minimum 49152 -Maximum 65000
+        $token = ([guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N'))
+        $l = New-Object Net.HttpListener
+        $l.Prefixes.Add("http://127.0.0.1:$port/$token/")
+        try { $l.Start() } catch { }
+    }
+    if (-not $l.IsListening) { throw 'no free port on 127.0.0.1' }
+    $srv = [pscustomobject]@{
+        Host = "127.0.0.1:$port"; Token = $token; Title = $title; Seen = [DateTime]::Now; Bye = $null
+        Page = $ViPage.Replace('__TITLE__', [Net.WebUtility]::HtmlEncode($title))
+        Pending = New-Object 'System.Collections.Generic.List[object]'
+    }
+    $profileDir = Join-Path (Split-Path (ViRegistryDir) -Parent) 'manager\edge'
+    ViLoad @('*')
+    $url = "http://127.0.0.1:$port/$token/"
+    # for tests only: where to write the page's address, so a test can drive the same API the page does
+    if ($env:VI_MANAGER_URL_FILE) { [IO.File]::WriteAllText($env:VI_MANAGER_URL_FILE, $url) }
+    $proc = Start-Process -FilePath $edge -PassThru -ArgumentList "--app=$url", "--user-data-dir=`"$profileDir`"", '--no-first-run',
+        '--no-default-browser-check', '--window-size=980,760', '--disable-features=msEdgeSidebarV2,Translate'
+    $next = $l.GetContextAsync()
+    try {
+        while ($true) {
+            ViPump
+            while ($next.IsCompleted) {
+                if ($next.Status -eq 'RanToCompletion') { try { ViServe $next.Result $srv } catch { try { $next.Result.Response.Abort() } catch { } } }
+                $next = $l.GetContextAsync()
+            }
+
+            $now = [DateTime]::Now
+            for ($i = $srv.Pending.Count - 1; $i -ge 0; $i--) {
+                $p = $srv.Pending[$i]
+                if ($p.Until -le $now -or $p.Rev -ne $M.Rev) {
+                    $srv.Pending.RemoveAt($i)
+                    ViSend $p.Ctx 200 'application/json' (ViStateJson $srv.Title)
+                }
+            }
+            # the window is gone: Edge exited, it said goodbye and did not come back, or it stopped polling
+            $gone = $proc.HasExited -or ($srv.Bye -and ($now - $srv.Bye).TotalSeconds -gt 3) -or ($now - $srv.Seen).TotalSeconds -gt 45
+            if ($gone) {
+                if ($M.Job -and $M.Job.Phase -eq 'busy') { }        # placing files: let it finish
+                elseif ($M.Job -or $M.Queue.Count -gt 0) { ViCancel }
+                else { break }
+            }
+            Start-Sleep -Milliseconds 15
+        }
+    } finally {
+        foreach ($p in $srv.Pending) { try { $p.Ctx.Response.Abort() } catch { } }
+        $l.Stop(); $l.Close()
+        if (-not $proc.HasExited) { & taskkill.exe /PID $proc.Id /T /F 2>&1 | Out-Null }
+    }
+}
+
+# The page the Edge front end serves; __TITLE__ is replaced. Plain HTML, CSS and script, nothing loaded from elsewhere.
+$ViPage = @'
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+  :root {
+    --accent: #2563eb; --bg: #050608; --bg-2: #0b0d12; --panel: #10131a; --line: #1f2430; --line-2: #2c3342;
+    --text: #f2f4f8; --muted: #9aa3b5; --dim: #5f6879; --cyan: #3ee0ff; --violet: #8b5cf6; --lime: #b6f23c; --red: #ff5d73;
+    --amber: #ffc04d; --grad: linear-gradient(100deg, var(--cyan), var(--accent) 55%, var(--violet));
+    --mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         display: flex; flex-direction: column; overflow: hidden; }
+  header { padding: 22px 28px 14px; border-bottom: 1px solid var(--line); background: var(--bg-2); }
+  .eyebrow { font: 700 0.72rem/1 var(--mono); letter-spacing: 0.2em; text-transform: uppercase; color: var(--cyan); }
+  h1 { margin: 8px 0 4px; font-size: 1.7rem; letter-spacing: -0.03em; font-weight: 900; background: var(--grad);
+       -webkit-background-clip: text; background-clip: text; color: transparent; width: fit-content; }
+  .sub { color: var(--muted); font-size: 0.88rem; margin: 0; }
+  .bar { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+  button { appearance: none; border: 1px solid var(--line-2); background: var(--panel); color: var(--text); border-radius: 4px;
+           font: 700 0.86rem system-ui, sans-serif; padding: 8px 14px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--cyan); }
+  button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+  button.primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+  button.danger:hover:not(:disabled) { border-color: var(--red); color: var(--red); }
+  button:disabled { opacity: 0.4; cursor: default; }
+  main { flex: 1; overflow-y: auto; padding: 18px 28px; display: flex; flex-direction: column; gap: 10px; }
+  .empty { color: var(--muted); padding: 40px 0; text-align: center; }
+  .app { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; }
+  .app.update { border-color: rgba(62,224,255,0.45); box-shadow: 0 0 24px rgba(37,99,235,0.18); }
+  .app.error { border-color: rgba(255,93,115,0.5); }
+  .row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .name { font-weight: 800; font-size: 1.02rem; }
+  .ver { font: 0.84rem var(--mono); color: var(--muted); }
+  .ver b { color: var(--lime); font-weight: 700; }
+  .state { font-size: 0.86rem; color: var(--muted); flex: 1; min-width: 160px; }
+  .app.error .state { color: var(--red); }
+  .app.update .state { color: var(--cyan); }
+  .acts { display: flex; gap: 6px; margin-left: auto; }
+  .dir { font: 0.78rem var(--mono); color: var(--dim); margin-top: 6px; overflow-wrap: anywhere; }
+  .change { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); display: grid; gap: 10px; }
+  .change label { display: flex; gap: 10px; align-items: center; font-size: 0.9rem; }
+  .change input[type=text] { width: 100%; background: #07080b; border: 1px solid var(--line-2); color: var(--text); border-radius: 4px;
+                             padding: 8px 10px; font: 0.86rem var(--mono); }
+  .change input[type=checkbox] { accent-color: var(--cyan); width: 16px; height: 16px; }
+  .change .hint { color: var(--dim); font-size: 0.8rem; }
+  footer { border-top: 1px solid var(--line); background: var(--bg-2); padding: 12px 28px 16px; }
+  .status { font-size: 0.86rem; color: var(--muted); min-height: 1.3em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .progress { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin: 8px 0; }
+  .progress div { height: 100%; width: 0; background: var(--grad); transition: width 0.15s; }
+  .progress.busy div { width: 30%; animation: slide 1.1s linear infinite; }
+  @keyframes slide { from { margin-left: -30%; } to { margin-left: 100%; } }
+  details summary { cursor: pointer; color: var(--dim); font-size: 0.8rem; }
+  pre { margin: 8px 0 0; max-height: 170px; overflow: auto; background: #07080b; border: 1px solid var(--line); border-radius: 4px;
+        padding: 10px 12px; font: 0.76rem/1.45 var(--mono); color: var(--muted); white-space: pre-wrap; }
+  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line-2); border-radius: 8px; max-width: 480px; padding: 20px 22px; }
+  dialog::backdrop { background: rgba(0,0,0,0.6); }
+  dialog p { margin: 0 0 16px; white-space: pre-wrap; }
+  dialog .acts { justify-content: flex-end; }
+  .lost { position: fixed; inset: 0; background: rgba(5,6,8,0.92); display: none; align-items: center; justify-content: center;
+          text-align: center; color: var(--muted); padding: 20px; }
+  .lost.on { display: flex; }
+</style>
+</head>
+<body>
+<header>
+  <div class="eyebrow">Installed apps</div>
+  <h1 id="title">__TITLE__</h1>
+  <p class="sub">Every download is checked against its SHA-256 before anything changes, and a failed change is put back.</p>
+  <div class="bar">
+    <button id="all" class="primary">Update all</button>
+    <button id="check">Check again</button>
+    <button id="cancel">Cancel</button>
+  </div>
+</header>
+<main id="apps"><div class="empty">Loading...</div></main>
+<footer>
+  <div class="status" id="status"></div>
+  <div class="progress" id="progress"><div></div></div>
+  <details><summary>Log</summary><pre id="log"></pre></details>
+</footer>
+<dialog id="ask"><p id="ask-text"></p><div class="acts" id="ask-acts"></div></dialog>
+<div class="lost" id="lost"><div>The manager stopped. Close this window, and open it again from the Start menu.</div></div>
+<script>
+"use strict";
+const base = location.pathname.replace(/\/$/, "");
+let state = null, rev = -1, open = null, failures = 0;
+const $ = (id) => document.getElementById(id);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+
+async function api(path, body) {
+  const r = await fetch(base + "/api/" + path, body === undefined ? { cache: "no-store" } :
+    { method: "POST", headers: { "Content-Type": "application/json", "X-Vi": "1" }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(r.status + " " + r.statusText);
+  return r.json();
+}
+
+function ask(text, buttons) {
+  return new Promise((resolve) => {
+    $("ask-text").textContent = text;
+    const acts = $("ask-acts"); acts.replaceChildren();
+    buttons.forEach(([label, value, cls]) => {
+      const b = el("button", cls || "", label);
+      b.onclick = () => { $("ask").close(); resolve(value); };
+      acts.append(b);
+    });
+    $("ask").oncancel = () => resolve(null);
+    $("ask").showModal();
+    acts.lastChild.focus();
+  });
+}
+
+// what is running from an install folder: close it first (true), leave it (false), or stop (null)
+async function running(app, what) {
+  const r = await api("running", { id: app.id });
+  if (!r.names.length) return false;
+  const list = r.names.join("\n");
+  if (what === "remove") return await ask(app.name + " is running:\n\n" + list + "\n\nIt will be closed before it is removed.", [["Close it and remove", true, "danger"], ["Cancel", null]]);
+  return await ask(app.name + " is running:\n\n" + list + "\n\nClose it first? Otherwise the files it is not using are replaced now, and it is updated the next time it starts.",
+    [["Close it", true, "primary"], ["Leave it running", false], ["Cancel", null]]);
+}
+
+async function act(kind, app, options) {
+  if (kind === "remove") {
+    const go = await ask("Remove " + app.name + " " + app.version + " from\n" + app.dir + "?", [["Remove", true, "danger"], ["Cancel", null]]);
+    if (!go) return;
+  }
+  const close = await running(app, kind);
+  if (close === null) return;
+  open = null;
+  await api("act", { kind, id: app.id, options: options || null, closeApps: close });
+}
+
+function renderApp(a) {
+  const card = el("section", "app " + a.state);
+  const row = el("div", "row");
+  row.append(el("span", "name", a.name));
+  const ver = el("span", "ver", a.version);
+  if (a.latest && a.state === "update") { ver.append(" " + String.fromCharCode(8594) + " "); ver.append(el("b", null, a.latest)); }
+  row.append(ver, el("span", "state", a.message));
+  const acts = el("div", "acts");
+  const idle = a.state !== "busy" && a.state !== "queued";
+  const up = el("button", "primary", "Update"); up.disabled = !(idle && a.state === "update"); up.onclick = () => act("update", a);
+  const ch = el("button", "", open === a.id ? "Close" : "Change..."); ch.disabled = !(idle && a.hasManifest);
+  ch.onclick = () => { open = open === a.id ? null : a.id; render(); };
+  const rm = el("button", "danger", "Remove"); rm.disabled = !idle; rm.onclick = () => act("remove", a);
+  acts.append(up, ch, rm);
+  row.append(acts);
+  card.append(row, el("div", "dir", a.dir));
+  if (open === a.id) {
+    const f = el("div", "change");
+    const dl = el("label"); dl.style.display = "grid"; dl.append(el("span", null, "Install folder (it is moved when this changes)"));
+    const dir = el("input"); dir.type = "text"; dir.value = a.dir; dir.spellcheck = false; dl.append(dir); f.append(dl);
+    const boxes = [];
+    [["noShortcuts", "shortcuts", "Shortcuts on the desktop / in the Start menu"], ["noPath", "path", "On the user PATH"], ["noAssociations", "assoc", "Opens its file types"]]
+      .forEach(([key, choice, text]) => {
+        if (!a.choices[choice]) return;   // only what this version has
+        const l = el("label"); const cb = el("input"); cb.type = "checkbox"; cb.checked = !a.options[key];
+        l.append(cb, el("span", null, text)); f.append(l); boxes.push([key, cb]);
+      });
+    if (!boxes.length) f.append(el("div", "hint", "This version makes no shortcuts, PATH entries or file types."));
+    const go = el("button", "primary", "Apply");
+    go.onclick = () => { const o = { dir: dir.value.trim() }; boxes.forEach(([k, cb]) => { if (!cb.disabled) o[k] = !cb.checked; }); act("change", a, o); };
+    const bar = el("div", "acts"); bar.style.marginLeft = "0"; bar.append(go);
+    f.append(el("div", "hint", "Applied by reinstalling " + a.version + " with these choices."), bar);
+    card.append(f);
+  }
+  return card;
+}
+
+function render() {
+  if (!state) return;
+  document.title = state.title; $("title").textContent = state.title;
+  const apps = $("apps"); const keep = apps.scrollTop;
+  const focused = document.activeElement && document.activeElement.closest(".change");
+  if (!focused) {
+    apps.replaceChildren(...(state.apps.length ? state.apps.map(renderApp) : [el("div", "empty", "Nothing is installed.")]));
+    apps.scrollTop = keep;
+  }
+  $("all").disabled = !state.apps.some((a) => a.state === "update");
+  $("cancel").disabled = !state.canCancel;
+  $("status").textContent = state.status;
+  const p = $("progress");
+  p.classList.toggle("busy", !!state.job && state.progress < 0);
+  p.firstChild.style.width = state.progress >= 0 ? state.progress + "%" : (state.job ? "" : "0");
+  const log = $("log"); const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
+  log.textContent = state.log.join("\n"); if (atEnd) log.scrollTop = log.scrollHeight;
+}
+
+async function poll() {
+  for (;;) {
+    try {
+      const s = await api("state?rev=" + rev);
+      failures = 0; $("lost").classList.remove("on");
+      if (s.rev !== rev) { state = s; rev = s.rev; render(); }
+    } catch (e) {
+      if (++failures >= 3) $("lost").classList.add("on");
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+}
+
+$("all").onclick = async () => {
+  let close = false;
+  for (const a of state.apps.filter((x) => x.state === "update")) { const c = await running(a, "update"); if (c === null) return; close = close || c; }
+  await api("act", { kind: "all", closeApps: close });
+};
+$("check").onclick = () => api("act", { kind: "check" });
+$("cancel").onclick = () => api("act", { kind: "cancel" });
+addEventListener("beforeunload", (e) => { if (state && state.job && state.job.phase === "busy") { e.preventDefault(); e.returnValue = ""; } });
+addEventListener("pagehide", () => navigator.sendBeacon(base + "/api/bye?x=1", ""));
+poll();
+</script>
+</body>
+</html>
+'@
+
 # ---- console ---------------------------------------------------------------------------
 
 function ViListConsole {
@@ -572,7 +961,7 @@ function ViRunConsole([string]$kind, [string]$id, [bool]$closeApps) {
     -not $failed
 }
 
-$ViMode = 'window'; $ViId = $null; $ViClose = $false
+$ViMode = 'window'; $ViId = $null; $ViClose = $false; $ViForms = $false
 for ($ViI = 0; $ViI -lt $args.Count; $ViI++) {
     switch -Regex ($args[$ViI]) {
         '^-List$' { $ViMode = 'list' }
@@ -580,11 +969,20 @@ for ($ViI = 0; $ViI -lt $args.Count; $ViI++) {
         '^-UpdateAll$' { $ViMode = 'all' }
         '^-Remove$' { $ViMode = 'remove'; $ViI++; $ViId = $args[$ViI] }
         '^-CloseApps$' { $ViClose = $true }
+        '^-Forms$' { $ViForms = $true }
         default { Write-Warning "Ignoring unknown argument: $($args[$ViI])" }
     }
 }
 switch ($ViMode) {
     'list' { ViListConsole }
-    'window' { ViRunWindow }
+    'window' {
+        $edge = if ($ViForms) { $null } else { ViFindEdge }
+        $shown = $false
+        if ($edge) {
+            try { ViRunEdge $edge; $shown = $true }
+            catch { Write-Warning "The Edge window could not be opened ($($_.Exception.Message)); using the plain one." }
+        }
+        if (-not $shown) { ViRunWindow }
+    }
     default { if (-not (ViRunConsole $ViMode $ViId $ViClose)) { exit 1 } }
 }

@@ -242,6 +242,12 @@ GitHub Pages (**Settings > Pages > Deploy from a branch**).
   a quiet child process, one at a time, and follows its events. It asks before closing what is running from
   an install folder. Cancel stops a job only while it downloads. `-List`, `-Update <id>`, `-UpdateAll` and
   `-Remove <id>` (with `-CloseApps`) do the same in the console.
+  The window is Microsoft Edge in app mode (no browser chrome, its own profile in `manager\edge`) showing a
+  page the manager serves on `127.0.0.1` at a random port, behind a 64-character random token in the path.
+  Requests must carry exactly that `Host` (against DNS rebinding), and changes must be POSTs from the page's
+  own origin with an `X-Vi` header, which another site cannot send without a preflight the server never
+  answers. The manager ends when the window closes or stops polling, after a change that is placing files
+  has finished. Without Edge, or with `-Forms`, it opens the same window in WinForms.
 - **diagnose.ps1** (`diagnose.cmd`) checks the computer against `windows.system` and writes a text report
   for bug reports to `<registryDir>\..\diagnostics\<id>-<time>.txt` (the last ten are kept; `-Out`, `-Copy`,
   `-Json`): Windows edition and build, processor, memory, disk, GPU scheduling, power; each display's
@@ -321,4 +327,5 @@ powershell -File tests\smoke.ps1   # build, install via irm|iex, update, uninsta
 powershell -File tests\suite-smoke.ps1   # a suite of three: INSTALL_ONLY, unpublished and tampered members
 powershell -File tests\window.ps1        # the installer window, through UI Automation (moves the mouse)
 powershell -File tests\suite-window.ps1  # the suite window: pick members, cancel, a tampered member, stop a download
+powershell -File tests\manager.ps1       # the app manager in Edge, through the API its page uses (opens a window)
 ```
