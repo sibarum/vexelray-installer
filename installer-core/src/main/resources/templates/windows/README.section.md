@@ -6,8 +6,9 @@ Open **PowerShell** (a normal window - administrator rights are not needed) and 
 {{INSTALL_COMMAND}}
 ```
 
-That is the whole install. It downloads {{NAME}} {{VERSION}}, checks every file against the
-SHA-256 in the [install manifest]({{MANIFEST_URL}}), and installs for your user only.
+That is the whole install. A window opens where you can change the folder and choose shortcuts,
+PATH and file types, then press **Install**. It downloads {{NAME}} {{VERSION}}, checks every file
+against the SHA-256 in the [install manifest]({{MANIFEST_URL}}), and installs for your user only.
 
 What it does:
 
@@ -15,7 +16,8 @@ What it does:
 {{REQUIREMENTS}}
 ### Options
 
-Set these in the same PowerShell window *before* the install command:
+The window covers the folder and the `NO_*` choices. For a scripted install, or one without the
+window, set these in the same PowerShell window *before* the install command:
 
 | Variable | Effect |
 | --- | --- |
@@ -26,6 +28,7 @@ Set these in the same PowerShell window *before* the install command:
 | `$env:INSTALL_NO_ASSOCIATIONS = '1'` | do not register {{NAME}} to open any file types |
 | `$env:INSTALL_FORCE = '1'` | reinstall even if this version is already installed |
 | `$env:INSTALL_SKIP_CHECKS = '1'` | install even if this computer does not meet the system requirements |
+| `$env:INSTALL_QUIET = '1'` | no window: ask nothing and report in PowerShell only |
 
 Updates and reinstalls remember the `INSTALL_NO_*` choices of the last install. To get shortcuts,
 the PATH entry or file types back, set that variable to `'0'` and run the install command again.

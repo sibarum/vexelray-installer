@@ -19,7 +19,8 @@ per platform; macOS and Linux arrive as new `PlatformTarget`s with their own tem
 | `installer-maven-plugin` | Goals `installer:generate` and `installer:publish`. |
 
 Build and test everything: `mvn install` (Java 21+). End to end on Windows:
-`powershell -File tests\smoke.ps1`.
+`powershell -File tests\smoke.ps1`. The installer window: `powershell -File tests\window.ps1` (drives it
+with the mouse, so it needs an unlocked desktop).
 
 ## Use from Maven
 
@@ -188,8 +189,14 @@ GitHub Pages (**Settings > Pages > Deploy from a branch**).
   registers file types, optionally edits the user PATH, and registers an Apps & features entry.
   Nothing is written to the install dir until every download has verified. Options:
   `INSTALL_VERSION`, `INSTALL_DIR`, `INSTALL_NO_SHORTCUTS`, `INSTALL_NO_PATH`,
-  `INSTALL_NO_ASSOCIATIONS`, `INSTALL_FORCE`, `INSTALL_SKIP_CHECKS`. The `NO_*` choices in effect are stored in the
+  `INSTALL_NO_ASSOCIATIONS`, `INSTALL_FORCE`, `INSTALL_SKIP_CHECKS`, `INSTALL_QUIET`. The `NO_*` choices in effect are stored in the
   install record (`options`), and updates and reinstalls keep them; `INSTALL_NO_*=0` opts back in.
+  Run from a console a person is at, it opens a WinForms window: the folder and the shortcut, PATH and
+  file-type choices (filled from the options above and the last install), then a progress bar and the same
+  log the console gets, then **Start** (the first shortcut), or for a failure the error, **Open report** and a
+  link to `issuesUrl`. Unmet system requirements are asked about rather than refused, and Cancel stops any
+  time before files are placed. `INSTALL_QUIET=1` (`-Quiet`), `CI`, `-NonInteractive` or redirected output
+  keep it in the console; `update.ps1` and suite installs always run their installers quietly.
 - **diagnose.ps1** (`diagnose.cmd`) checks the computer against `windows.system` and writes a text report
   for bug reports to `<registryDir>\..\diagnostics\<id>-<time>.txt` (the last ten are kept; `-Out`, `-Copy`,
   `-Json`): Windows edition and build, processor, memory, disk, GPU scheduling, power; each display's

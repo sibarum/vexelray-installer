@@ -25,6 +25,7 @@ public final class WindowsTarget implements PlatformTarget {
         n.put("id", c.id);
         n.put("name", c.name);
         n.put("publisher", c.publisherOrName());
+        n.put("description", c.descriptionOrDefault());
         n.put("manifestUrl", manifestUrl);
         n.put("registryDir", registryDir(p));
         String issues = c.issuesUrlOrDefault();

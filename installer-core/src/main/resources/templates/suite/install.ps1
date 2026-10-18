@@ -97,6 +97,10 @@ function SuiteInstall {
             [Environment]::SetEnvironmentVariable($n, $null, 'Process')
         }
     }
+    # Each application's installer would open a window of its own, one after another; the suite keeps them
+    # all in this console.
+    $quiet = [Environment]::GetEnvironmentVariable('INSTALL_QUIET', 'Process')
+    [Environment]::SetEnvironmentVariable('INSTALL_QUIET', '1', 'Process')
     $tmp = Join-Path ([IO.Path]::GetTempPath()) ("vi-suite-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
     New-Item -ItemType Directory -Force -Path $tmp | Out-Null
     $results = @()
@@ -105,6 +109,7 @@ function SuiteInstall {
         foreach ($m in $members) { $results += [pscustomobject]@{ Member = $m; Result = (SuiteInstallOne $m $tmp) } }
     } finally {
         foreach ($n in $held.Keys) { [Environment]::SetEnvironmentVariable($n, $held[$n], 'Process') }
+        [Environment]::SetEnvironmentVariable('INSTALL_QUIET', $quiet, 'Process')
         Remove-Item -Recurse -Force -LiteralPath $tmp -ErrorAction SilentlyContinue
     }
 

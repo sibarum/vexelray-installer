@@ -10,16 +10,38 @@
 #   INSTALL_NO_ASSOCIATIONS=1  do not register file types
 #   INSTALL_FORCE=1          reinstall even if this version is already installed
 #   INSTALL_SKIP_CHECKS=1    install even if this computer does not meet the system requirements
+#   INSTALL_QUIET=1          no window: ask nothing and report in the console only
 #
 # Updates and reinstalls keep the NO_* choices of the last install; set one to 0 to opt back in.
 #
+# Run from a console a person is at, the installer opens a window where the folder and the NO_* choices
+# can be changed, and shows its progress there as well as in the console. It stays in the console when
+# INSTALL_QUIET is set, under CI, with -NonInteractive, or when its output is redirected.
+#
 # The same options are accepted as arguments when the script is run from a file:
-#   -Version 1.2.3  -Dir C:\some\dir  -NoShortcuts  -NoPath  -NoAssociations  -Force  -SkipChecks
+#   -Version 1.2.3  -Dir C:\some\dir  -NoShortcuts  -NoPath  -NoAssociations  -Force  -SkipChecks  -Quiet
 
 $InstallerCfg = '{{CONFIG_JSON}}' | ConvertFrom-Json
 
-function ViStep([string]$m) { Write-Host "==> $m" -ForegroundColor Cyan }
-function ViInfo([string]$m) { Write-Host "    $m" }
+# The window, when there is one: ViUiLog copies console output into it, and is a no-op without it.
+function ViUiLog([string]$m) {
+    if ($ViUi -and -not $ViUi.Closed) { $ViUi.Log.AppendText("$m`r`n"); [Windows.Forms.Application]::DoEvents() }
+}
+function ViUiBar([int]$pct) {
+    if (-not $ViUi -or $ViUi.Closed) { return }
+    if ($pct -lt 0) { $ViUi.Bar.Style = 'Marquee' } else { $ViUi.Bar.Style = 'Continuous'; $ViUi.Bar.Value = [Math]::Min(100, $pct) }
+}
+function ViStep([string]$m) {
+    Write-Host "==> $m" -ForegroundColor Cyan
+    if ($ViUi -and -not $ViUi.Closed) { $ViUi.Status.Text = $m; ViUiBar -1 }
+    ViUiLog $m
+}
+function ViInfo([string]$m) { Write-Host "    $m"; ViUiLog "    $m" }
+function ViWarn([string]$m) { Write-Warning $m; ViUiLog "    Warning: $m" }
+function ViSay([string]$m, [string]$color) {
+    if ($color) { Write-Host $m -ForegroundColor $color } else { Write-Host $m }
+    ViUiLog $m
+}
 function ViExpand([string]$p) { [Environment]::ExpandEnvironmentVariables($p) }
 function ViSha([string]$p) { (Get-FileHash -Algorithm SHA256 -LiteralPath $p).Hash.ToLowerInvariant() }
 
@@ -215,7 +237,7 @@ function ViCheckSignature([string]$path, $meta, [string]$label) {
         if ($cert.Thumbprint -ne ([string]$meta.thumbprint).ToUpperInvariant()) {
             throw "$label is signed by a different certificate than the manifest pins ($($cert.Thumbprint)). Nothing was installed."
         }
-        if ($st -ne 'Valid') { Write-Warning "$label is signed by the pinned certificate $($cert.Thumbprint), which this machine does not trust ($st)." }
+        if ($st -ne 'Valid') { ViWarn "$label is signed by the pinned certificate $($cert.Thumbprint), which this machine does not trust ($st)." }
     } elseif ($st -ne 'Valid') {
         throw "$label has a signature from $($cert.Subject) that is not trusted ($st). Nothing was installed."
     }
@@ -235,6 +257,7 @@ function ViExpandZip([string]$zip, [string]$dest) {
             if ($e.FullName.EndsWith('/') -or $e.FullName.EndsWith('\')) { ViEnsureDir $p; continue }
             ViEnsureDir (Split-Path $p -Parent)
             [IO.Compression.ZipFileExtensions]::ExtractToFile($e, $p, $true)
+            if ($ViUi -and -not $ViUi.Closed) { [Windows.Forms.Application]::DoEvents() }
         }
     } finally { $z.Dispose() }
 }
@@ -286,6 +309,339 @@ function ViShortcut([string]$lnk, [string]$target, [string]$arguments, [string]$
     if ($desc) { $s.Description = $desc }
     if ($icon) { $s.IconLocation = "$icon,0" }
     $s.Save()
+}
+
+# ---- window ----------------------------------------------------------------------------
+# Everything runs on this one thread: the window's event handlers only set $ViUi.Action, the install code
+# reads it, and Application.DoEvents (from ViUiLog, ViDownload and ViUiWait) keeps the window responsive.
+# The handlers are closures, so they touch $ui and .NET objects only, never the Vi* functions.
+
+function ViWantsWindow([bool]$quiet) {
+    if ($quiet -or ($env:INSTALL_QUIET -and $env:INSTALL_QUIET -ne '0') -or $env:CI) { return $false }
+    if (-not [Environment]::UserInteractive) { return $false }
+    if (@([Environment]::GetCommandLineArgs() | Where-Object { $_ -match '^[-/]noni' }).Count -gt 0) { return $false }
+    try { if ([Console]::IsOutputRedirected) { return $false } } catch { }
+    try { Add-Type -AssemblyName System.Windows.Forms, System.Drawing; return $true } catch { return $false }
+}
+
+function ViUiOpen {
+    try {
+        if (-not ('ViWin.ViDpi' -as [type])) {
+            Add-Type -Namespace ViWin -Name ViDpi -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetProcessDPIAware();'
+        }
+        [void][ViWin.ViDpi]::SetProcessDPIAware()
+    } catch { }
+    [Windows.Forms.Application]::EnableVisualStyles()
+    $ui = @{ Action = $null; Closed = $false; Phase = 'busy'; Leaf = $null }
+
+    $f = New-Object Windows.Forms.Form
+    $f.SuspendLayout()
+    $f.AutoScaleDimensions = New-Object Drawing.SizeF(96, 96)
+    $f.AutoScaleMode = [Windows.Forms.AutoScaleMode]::Dpi
+    $f.Font = New-Object Drawing.Font('Segoe UI', 9)
+    $f.Text = "$($InstallerCfg.name) Setup"
+    $f.FormBorderStyle = 'FixedDialog'
+    $f.MaximizeBox = $false
+    $f.StartPosition = 'CenterScreen'
+    $f.ClientSize = New-Object Drawing.Size(580, 420)
+
+    # header: title and one line under it
+    $head = New-Object Windows.Forms.Panel
+    $head.Dock = 'Top'; $head.Height = 68; $head.BackColor = [Drawing.SystemColors]::Window
+    $title = New-Object Windows.Forms.Label
+    $title.AutoSize = $true; $title.Location = New-Object Drawing.Point(18, 12)
+    $title.Font = New-Object Drawing.Font('Segoe UI Semibold', 12)
+    $sub = New-Object Windows.Forms.Label
+    $sub.AutoSize = $false; $sub.Location = New-Object Drawing.Point(19, 40); $sub.Size = New-Object Drawing.Size(545, 20)
+    $sub.AutoEllipsis = $true; $sub.ForeColor = [Drawing.SystemColors]::GrayText
+    $head.Controls.AddRange(@($title, $sub))
+    $rule = New-Object Windows.Forms.Panel
+    $rule.Dock = 'Top'; $rule.Height = 1; $rule.BackColor = [Drawing.SystemColors]::ControlDark
+
+    # buttons: the primary one left of the secondary one, a link on the left
+    $bar = New-Object Windows.Forms.Panel
+    $bar.Dock = 'Bottom'; $bar.Height = 50
+    $flow = New-Object Windows.Forms.FlowLayoutPanel
+    $flow.Dock = 'Right'; $flow.FlowDirection = 'RightToLeft'; $flow.AutoSize = $true; $flow.WrapContents = $false
+    $flow.Padding = New-Object Windows.Forms.Padding(0, 10, 10, 0)
+    $b2 = New-Object Windows.Forms.Button
+    $b1 = New-Object Windows.Forms.Button
+    foreach ($b in $b2, $b1) {
+        $b.AutoSize = $true; $b.MinimumSize = New-Object Drawing.Size(92, 28); $b.Margin = New-Object Windows.Forms.Padding(6, 0, 0, 0)
+    }
+    $flow.Controls.AddRange(@($b2, $b1))
+    $link = New-Object Windows.Forms.LinkLabel
+    $link.AutoSize = $true; $link.Location = New-Object Drawing.Point(18, 17); $link.Visible = $false
+    $bar.Controls.AddRange(@($flow, $link))
+
+    $body = New-Object Windows.Forms.Panel
+    $body.Dock = 'Fill'; $body.Padding = New-Object Windows.Forms.Padding(18, 14, 18, 6)
+
+    # options page
+    $opts = New-Object Windows.Forms.Panel
+    $opts.Dock = 'Fill'
+    $dirLabel = New-Object Windows.Forms.Label
+    $dirLabel.Text = 'Install to'; $dirLabel.AutoSize = $true; $dirLabel.Location = New-Object Drawing.Point(0, 2)
+    $dir = New-Object Windows.Forms.TextBox
+    $dir.Location = New-Object Drawing.Point(0, 24); $dir.Size = New-Object Drawing.Size(446, 25)
+    $browse = New-Object Windows.Forms.Button
+    $browse.Text = 'Browse...'; $browse.Location = New-Object Drawing.Point(452, 23); $browse.Size = New-Object Drawing.Size(92, 27)
+    $cbs = @()
+    $y = 70
+    foreach ($i in 0..2) {
+        $cb = New-Object Windows.Forms.CheckBox
+        $cb.AutoSize = $true; $cb.Location = New-Object Drawing.Point(2, $y); $cb.Visible = $false
+        $cbs += $cb; $y += 28
+    }
+    $note = New-Object Windows.Forms.Label
+    $note.Dock = 'Bottom'; $note.Height = 40; $note.ForeColor = [Drawing.SystemColors]::GrayText
+    $note.Text = 'Each download is checked against its SHA-256 before anything is written to the folder. Everything goes into your user account; no administrator rights are needed.'
+    $opts.Controls.AddRange(@($dirLabel, $dir, $browse, $note) + $cbs)
+
+    # progress page: status, bar, log
+    $prog = New-Object Windows.Forms.Panel
+    $prog.Dock = 'Fill'; $prog.Visible = $false
+    $log = New-Object Windows.Forms.TextBox
+    $log.Dock = 'Fill'; $log.Multiline = $true; $log.ReadOnly = $true; $log.ScrollBars = 'Vertical'
+    $log.Font = New-Object Drawing.Font('Consolas', 9); $log.BackColor = [Drawing.SystemColors]::Window
+    $gap = New-Object Windows.Forms.Panel
+    $gap.Dock = 'Top'; $gap.Height = 10
+    $pbar = New-Object Windows.Forms.ProgressBar
+    $pbar.Dock = 'Top'; $pbar.Height = 18; $pbar.MarqueeAnimationSpeed = 30; $pbar.Style = 'Marquee'
+    $status = New-Object Windows.Forms.Label
+    $status.Dock = 'Top'; $status.Height = 38; $status.AutoEllipsis = $true
+    # docking runs from the last control added to the first, so they are added bottom-up
+    $prog.Controls.AddRange(@($log, $gap, $pbar, $status))
+
+    $body.Controls.AddRange(@($opts, $prog))
+    $f.Controls.AddRange(@($body, $rule, $head, $bar))
+    $f.AcceptButton = $b1
+
+    $ui.Form = $f; $ui.Title = $title; $ui.Sub = $sub; $ui.B1 = $b1; $ui.B2 = $b2; $ui.Link = $link
+    $ui.Options = $opts; $ui.Dir = $dir; $ui.Checks = $cbs; $ui.Progress = $prog
+    $ui.Status = $status; $ui.Bar = $pbar; $ui.Log = $log
+
+    $b1.add_Click({ $ui.Action = 'primary' }.GetNewClosure())
+    $b2.add_Click({ $ui.Action = 'secondary' }.GetNewClosure())
+    $link.add_LinkClicked({ $ui.Action = 'link' }.GetNewClosure())
+    $browse.add_Click({
+        $d = New-Object Windows.Forms.FolderBrowserDialog
+        $d.Description = 'Choose the folder to install into.'
+        $start = $ui.Dir.Text.Trim()
+        while ($start -and -not (Test-Path -LiteralPath $start -PathType Container)) { $start = Split-Path $start -Parent }
+        if ($start) { $d.SelectedPath = $start }
+        if ($d.ShowDialog($ui.Form) -eq [Windows.Forms.DialogResult]::OK) {
+            $p = $d.SelectedPath.TrimEnd('\')
+            # a folder of its own inside the one chosen, as installers usually do
+            if ($ui.Leaf -and (Split-Path $p -Leaf) -ne $ui.Leaf) { $p = Join-Path $p $ui.Leaf }
+            $ui.Dir.Text = $p
+        }
+        $d.Dispose()
+    }.GetNewClosure())
+    # closing is cancelling while downloading, and is refused while files are being placed
+    $f.add_FormClosing({
+        param($s, $e)
+        if ($ui.Phase -eq 'busy') { $e.Cancel = $true }
+        elseif ($ui.Phase -eq 'download') { $e.Cancel = $true; $ui.Action = 'secondary' }
+    }.GetNewClosure())
+    $f.add_FormClosed({ $ui.Closed = $true; if (-not $ui.Action) { $ui.Action = 'close' } }.GetNewClosure())
+
+    ViUiPage $ui 'progress'
+    $title.Text = "Install $($InstallerCfg.name)"
+    $sub.Text = $InstallerCfg.description
+    $b1.Visible = $false
+    $b2.Text = 'Cancel'; $b2.Enabled = $false
+    $f.ResumeLayout($false)
+    $f.TopMost = $true
+    $f.Show()
+    $f.Activate()
+    $f.TopMost = $false
+    [Windows.Forms.Application]::DoEvents()
+    $ui
+}
+
+function ViUiPage($ui, [string]$page) {
+    $ui.Options.Visible = $page -eq 'options'
+    $ui.Progress.Visible = $page -eq 'progress'
+}
+
+# 'busy' (closing refused), 'download' (closing or Cancel cancels), 'options' or 'done' (closing closes)
+function ViUiPhase([string]$phase) {
+    if (-not $ViUi -or $ViUi.Closed) { return }
+    $ViUi.Phase = $phase
+    $ViUi.Action = $null
+    if ($phase -eq 'busy' -or $phase -eq 'download') {
+        $ViUi.B1.Visible = $false
+        $ViUi.B2.Text = 'Cancel'
+        $ViUi.B2.Enabled = $phase -eq 'download'
+    }
+}
+
+# Waits for a button, the link or the window being closed; returns 'primary', 'secondary', 'link' or 'close'.
+function ViUiWait {
+    $ViUi.Action = $null
+    while (-not $ViUi.Action -and -not $ViUi.Closed) { [Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 25 }
+    if ($ViUi.Action) { $ViUi.Action } else { 'close' }
+}
+
+function ViUiAsk([string]$text) {
+    $r = [Windows.Forms.MessageBox]::Show($ViUi.Form, $text, $ViUi.Form.Text, [Windows.Forms.MessageBoxButtons]::YesNo,
+        [Windows.Forms.MessageBoxIcon]::Warning, [Windows.Forms.MessageBoxDefaultButton]::Button2)
+    $r -eq [Windows.Forms.DialogResult]::Yes
+}
+
+function ViCommandName($b) {
+    $p = if ($b.kind -eq 'jar') { $b.launcher } else { $b.installPath }
+    [IO.Path]::GetFileNameWithoutExtension($p)
+}
+
+# The options page, filled from what this install would do. Returns the choices, or $null when cancelled.
+function ViUiOptions([string]$version, $old, [string]$installDir, [string]$defaultDir, [bool]$noShortcuts, [bool]$noPath, [bool]$noAssoc, $bins) {
+    $ui = $ViUi
+    $appName = $InstallerCfg.name
+    $verb = 'Install'
+    $ui.Sub.Text = "Version $version from $($InstallerCfg.publisher)"
+    if ($old) {
+        $c = ViCompare $version $old.version
+        if ($c -eq 0) { $verb = 'Reinstall'; $ui.Sub.Text = "Version $version is installed already. Reinstall it, or change its options." }
+        elseif ($c -gt 0) { $verb = 'Update'; $ui.Sub.Text = "Updates version $($old.version) to $version" }
+        else { $ui.Sub.Text = "Replaces version $($old.version) with the older $version" }
+    }
+    $ui.Title.Text = "$verb $appName"
+    $ui.Dir.Text = $installDir
+    $ui.Leaf = Split-Path $defaultDir -Leaf
+
+    $desk = @($bins | Where-Object { $_.shortcuts -and $_.shortcuts.desktop }).Count -gt 0
+    $menu = @($bins | Where-Object { $_.shortcuts -and $_.shortcuts.startMenu }).Count -gt 0
+    $cmds = @($bins | Where-Object { $_.addToPath } | ForEach-Object { ViCommandName $_ } | Select-Object -Unique)
+    $exts = @($bins | ForEach-Object { @($_.fileAssociations) } | Where-Object { $_ } | ForEach-Object { $_.extension } | Select-Object -Unique)
+    $rows = @()
+    if ($desk -or $menu) {
+        $where = if ($desk -and $menu) { 'on the desktop and in the Start menu' } elseif ($desk) { 'on the desktop' } else { 'in the Start menu' }
+        $rows += [pscustomobject]@{ Key = 'shortcuts'; Text = "Create shortcuts $where"; Skip = $noShortcuts }
+    }
+    if ($cmds.Count -gt 0) {
+        $rows += [pscustomobject]@{ Key = 'path'; Text = "Add to PATH, so $($cmds -join ', ') can be run from a terminal"; Skip = $noPath }
+    }
+    if ($exts.Count -gt 0) {
+        $rows += [pscustomobject]@{ Key = 'assoc'; Text = "Open $($exts -join ', ') files with $appName"; Skip = $noAssoc }
+    }
+    for ($i = 0; $i -lt $ui.Checks.Count; $i++) {
+        $cb = $ui.Checks[$i]
+        # (Visible reads false while the page is hidden, so the Tag says which boxes are in use)
+        $cb.Visible = $i -lt $rows.Count
+        $cb.Tag = $null
+        if ($i -lt $rows.Count) { $cb.Text = $rows[$i].Text; $cb.Checked = -not $rows[$i].Skip; $cb.Tag = $rows[$i].Key }
+    }
+
+    ViUiPage $ui 'options'
+    ViUiPhase 'options'
+    $ui.B1.Text = $verb; $ui.B1.Visible = $true; $ui.B1.Enabled = $true
+    $ui.B2.Text = 'Cancel'; $ui.B2.Enabled = $true
+    $ui.B1.Focus() | Out-Null
+    while ($true) {
+        if ((ViUiWait) -ne 'primary') { return $null }
+        $d = ViExpand $ui.Dir.Text.Trim()
+        $ok = $false
+        try { $ok = [IO.Path]::IsPathRooted($d) -and $d -match '^([a-zA-Z]:\\|\\\\)' -and [IO.Path]::GetFullPath($d) } catch { }
+        if ($ok) { break }
+        [void][Windows.Forms.MessageBox]::Show($ui.Form, "Choose a full folder path, such as $installDir.", $ui.Form.Text,
+            [Windows.Forms.MessageBoxButtons]::OK, [Windows.Forms.MessageBoxIcon]::Warning)
+    }
+    $pick = [ordered]@{ Dir = ([IO.Path]::GetFullPath($d)).TrimEnd('\'); NoShortcuts = $noShortcuts; NoPath = $noPath; NoAssociations = $noAssoc }
+    foreach ($cb in $ui.Checks) {
+        switch ($cb.Tag) {
+            'shortcuts' { $pick.NoShortcuts = -not $cb.Checked }
+            'path' { $pick.NoPath = -not $cb.Checked }
+            'assoc' { $pick.NoAssociations = -not $cb.Checked }
+        }
+    }
+    ViUiPage $ui 'progress'
+    $ui.Title.Text = "Installing $appName"
+    $ui.Sub.Text = "Version $version into $($pick.Dir)"
+    [pscustomobject]$pick
+}
+
+# The last page: what happened, and what can be done next. Returns when the window is closed.
+function ViUiFinish([bool]$ok, [string]$err) {
+    if (-not $ViUi -or $ViUi.Closed) { return }
+    $ui = $ViUi
+    $appName = $InstallerCfg.name
+    try {
+        if ($ViState.Cancelled) { return }
+        ViUiPage $ui 'progress'
+        ViUiPhase 'done'
+        $ui.B2.Text = 'Close'; $ui.B2.Enabled = $true
+        $ui.Form.AcceptButton = $ui.B2
+        if ($ok) {
+            $ui.Title.Text = "$appName is installed"
+            ViUiBar 100
+            $ui.Status.Text = "$appName $($ViState.Version) is installed in $($ViState.Dir)."
+            if ($ViState.Launch) {
+                $ui.B1.Text = "Start $($ViState.LaunchLabel)"; $ui.B1.Visible = $true
+                $ui.Form.AcceptButton = $ui.B1
+                $ui.B1.Focus() | Out-Null
+            }
+        } else {
+            $ui.Title.Text = "$appName was not installed"
+            ViUiBar 0
+            $ui.Status.ForeColor = [Drawing.Color]::FromArgb(176, 0, 32)
+            $ui.Status.Text = $err
+            if ($ViState.Report) { $ui.B1.Text = 'Open report'; $ui.B1.Visible = $true }
+            if ($InstallerCfg.issuesUrl) { $ui.Link.Text = 'Report the problem'; $ui.Link.Visible = $true }
+        }
+        while ($true) {
+            switch (ViUiWait) {
+                'primary' {
+                    if ($ok) {
+                        try { Start-Process -FilePath $ViState.Launch } catch { ViWarn "Could not start $($ViState.LaunchLabel): $($_.Exception.Message)" }
+                        return
+                    }
+                    try { Start-Process -FilePath $ViState.Report } catch { }
+                }
+                'link' { try { Start-Process -FilePath $InstallerCfg.issuesUrl } catch { } }
+                default { return }
+            }
+        }
+    } finally {
+        if (-not $ui.Closed) { $ui.Phase = 'done'; $ui.Form.Close() }
+        $ui.Form.Dispose()
+    }
+}
+
+# Invoke-WebRequest -OutFile, or with a window a chunked download that shows its progress, keeps the
+# window responsive and stops when Cancel is pressed.
+function ViDownload([string]$url, [string]$out, [string]$label) {
+    if (-not $ViUi -or $ViUi.Closed) { Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $out; return }
+    $ViUi.Status.Text = "Downloading $label"
+    [Windows.Forms.Application]::DoEvents()
+    $req = [Net.WebRequest]::Create($url)
+    $req.UserAgent = 'vexelray-installer'
+    $resp = $req.GetResponse()
+    try {
+        $total = $resp.ContentLength
+        $in = $resp.GetResponseStream()
+        $fs = [IO.File]::Create($out)
+        try {
+            $buf = New-Object byte[] 262144
+            $done = 0L; $shown = -1
+            ViUiBar $(if ($total -gt 0) { 0 } else { -1 })
+            while (($n = $in.Read($buf, 0, $buf.Length)) -gt 0) {
+                $fs.Write($buf, 0, $n)
+                $done += $n
+                if ($total -gt 0) {
+                    $pct = [int](100 * $done / $total)
+                    if ($pct -ne $shown) {
+                        $shown = $pct
+                        ViUiBar $pct
+                        $ViUi.Status.Text = "Downloading {0} ({1:N1} of {2:N1} MB)" -f $label, ($done / 1MB), ($total / 1MB)
+                    }
+                }
+                [Windows.Forms.Application]::DoEvents()
+                if ($ViUi.Action -eq 'secondary') { $ViState.Cancelled = $true; throw 'Cancelled. Nothing was installed.' }
+            }
+        } finally { $fs.Dispose(); $in.Dispose() }
+    } finally { $resp.Close() }
 }
 
 # ---- install ---------------------------------------------------------------------------
@@ -342,22 +698,34 @@ function ViInvokeInstall {
     $skipShortcuts = ViOptOut $NoShortcuts $env:INSTALL_NO_SHORTCUTS $old.options.noShortcuts
     $skipPath = ViOptOut $NoPath $env:INSTALL_NO_PATH $old.options.noPath
     $skipAssoc = ViOptOut $NoAssociations $env:INSTALL_NO_ASSOCIATIONS $old.options.noAssociations
+    $bins = @($plat.binaries)
+
+    # with a window those are the defaults it offers; pressing Install (or Reinstall) is the go-ahead
+    if ($ViUi) {
+        $pick = ViUiOptions $entry.version $old $installDir (ViExpand $plat.installDir).TrimEnd('\') $skipShortcuts $skipPath $skipAssoc $bins
+        if (-not $pick) { $ViState.Cancelled = $true; Write-Host 'Cancelled. Nothing was installed.'; return $false }
+        $installDir = $pick.Dir
+        $skipShortcuts = $pick.NoShortcuts; $skipPath = $pick.NoPath; $skipAssoc = $pick.NoAssociations
+        $Force = $true
+        ViUiPhase 'download'
+    }
+    $ViState.Version = $entry.version
+    $ViState.Dir = $installDir
 
     if ($old -and $old.version -eq $entry.version -and $old.installDir -eq $installDir -and -not $Force) {
         Write-Host "$appName $($entry.version) is already installed in $installDir. Set INSTALL_FORCE=1 to reinstall."
         return $true
     }
 
-    $bins = @($plat.binaries)
     $jars = @($bins | Where-Object { $_.kind -eq 'jar' -and -not $_.runtime })
     if ($jars.Count -gt 0) {
         $java = ViFindJava 'java'
         $need = [int]$plat.requires.java
         if (-not $java) {
-            Write-Warning "Java was not found. $appName needs a Java runtime$(if ($need) { " (version $need or newer)" }) on PATH or JAVA_HOME to start."
+            ViWarn "Java was not found. $appName needs a Java runtime$(if ($need) { " (version $need or newer)" }) on PATH or JAVA_HOME to start."
         } elseif ($need -gt 0) {
             $major = ViJavaMajor $java
-            if ($major -gt 0 -and $major -lt $need) { Write-Warning "Java $major found at $java, but $appName needs Java $need or newer." }
+            if ($major -gt 0 -and $major -lt $need) { ViWarn "Java $major found at $java, but $appName needs Java $need or newer." }
         }
     }
 
@@ -371,7 +739,7 @@ function ViInvokeInstall {
             $t = $manifest.tools.$tn
             if (-not $t) { continue }
             $dl = Join-Path $tmp $tn
-            Invoke-WebRequest -UseBasicParsing -Uri $t.url -OutFile $dl
+            ViDownload $t.url $dl $tn
             if ((ViSha $dl) -ne $t.sha256) { throw "Checksum mismatch for $tn downloaded from $($t.url). Nothing was installed." }
             $tools += [pscustomobject]@{ Name = $tn; Temp = $dl; Sha = $t.sha256 }
             if ($tn -eq 'diagnose.ps1') { $ViState.DiagText = [IO.File]::ReadAllText($dl) }
@@ -382,12 +750,16 @@ function ViInvokeInstall {
             try {
                 $chk = & ([scriptblock]::Create($ViState.DiagText)) -Check -Requires ($plat.requires.system | ConvertTo-Json -Compress -Depth 5) `
                     -InstallDir $installDir -Installing $entry.version | Select-Object -Last 1
-            } catch { Write-Warning "The system check could not run: $($_.Exception.Message)" }
+            } catch { ViWarn "The system check could not run: $($_.Exception.Message)" }
             if ($chk) {
-                foreach ($c in @($chk.unknown)) { Write-Warning "Could not check: $($c.check) ($($c.found))" }
-                foreach ($c in @($chk.failed)) { Write-Host "    Not met: $($c.check)`n             found: $($c.found)" -ForegroundColor Red }
+                foreach ($c in @($chk.unknown)) { ViWarn "Could not check: $($c.check) ($($c.found))" }
+                foreach ($c in @($chk.failed)) { ViSay "    Not met: $($c.check)`n             found: $($c.found)" Red }
+                $unmet = (@($chk.failed) | ForEach-Object { "- $($_.check) (found: $($_.found))" }) -join "`n"
                 if ($chk.ok) { ViInfo "Met" }
-                elseif ($SkipChecks) { Write-Warning "Installing anyway, as INSTALL_SKIP_CHECKS is set. $appName may not start or may misbehave." }
+                elseif ($SkipChecks) { ViWarn "Installing anyway, as INSTALL_SKIP_CHECKS is set. $appName may not start or may misbehave." }
+                elseif ($ViUi -and (ViUiAsk "This computer does not meet the system requirements of ${appName}:`n`n$unmet`n`n$appName may not start, or may misbehave. Install it anyway?")) {
+                    ViWarn "Installing anyway, as asked. $appName may not start or may misbehave."
+                }
                 else {
                     $ViState.Report = $chk.report
                     throw "This computer does not meet the system requirements of $appName. Nothing was installed. Set INSTALL_SKIP_CHECKS=1 to install anyway."
@@ -405,7 +777,7 @@ function ViInvokeInstall {
                 if (-not ((Test-Path -LiteralPath $itarget) -and ((ViSha $itarget) -eq $b.icon.sha256))) {
                     ViInfo "$($b.icon.file)"
                     $itemp = Join-Path $tmp $b.icon.file
-                    Invoke-WebRequest -UseBasicParsing -Uri $b.icon.url -OutFile $itemp
+                    ViDownload $b.icon.url $itemp $b.icon.file
                     if ((ViSha $itemp) -ne $b.icon.sha256) { throw "Checksum mismatch for $($b.icon.file) downloaded from $($b.icon.url). Nothing was installed." }
                 }
                 $ic = [pscustomobject]@{ Target = $itarget; Temp = $itemp; Meta = $b.icon }
@@ -417,7 +789,7 @@ function ViInvokeInstall {
                 if (-not ((Test-Path -LiteralPath $ftarget) -and ((ViSha $ftarget) -eq $fi.sha256))) {
                     ViInfo "$($fi.file)"
                     $ftemp = Join-Path $tmp $fi.file
-                    Invoke-WebRequest -UseBasicParsing -Uri $fi.url -OutFile $ftemp
+                    ViDownload $fi.url $ftemp $fi.file
                     if ((ViSha $ftemp) -ne $fi.sha256) { throw "Checksum mismatch for $($fi.file) downloaded from $($fi.url). Nothing was installed." }
                 }
                 $fic += [pscustomobject]@{ Target = $ftarget; Temp = $ftemp; Meta = $fi }
@@ -439,7 +811,7 @@ function ViInvokeInstall {
                 }
                 ViInfo ("{0} ({1:N1} MB)" -f $b.file, ($b.size / 1MB))
                 $dl = Join-Path $tmp $b.file
-                Invoke-WebRequest -UseBasicParsing -Uri $b.url -OutFile $dl
+                ViDownload $b.url $dl $b.file
                 if ((ViSha $dl) -ne $b.sha256) { throw "Checksum mismatch for $($b.file) downloaded from $($b.url). Nothing was installed." }
                 ViInfo "Unpacking $($b.file)"
                 $xdir = Join-Path $tmp ("x-" + $b.name)
@@ -456,12 +828,13 @@ function ViInvokeInstall {
             }
             ViInfo ("{0} ({1:N1} MB)" -f $b.file, ($b.size / 1MB))
             $dl = Join-Path $tmp $b.file
-            Invoke-WebRequest -UseBasicParsing -Uri $b.url -OutFile $dl
+            ViDownload $b.url $dl $b.file
             if ((ViSha $dl) -ne $b.sha256) { throw "Checksum mismatch for $($b.file) downloaded from $($b.url). Nothing was installed." }
             ViCheckSignature $dl $b.signature $b.file
             $staged += [pscustomobject]@{ Bin = $b; Target = $target; Temp = $dl; Icon = $ic; FileIcons = $fic }
         }
-        # 2. place files
+        # 2. place files; from here on the install is not cancelled halfway
+        ViUiPhase 'busy'
         ViStep "Installing to $installDir"
         ViEnsureDir $installDir
         $files = @()
@@ -510,7 +883,7 @@ function ViInvokeInstall {
         foreach ($t in $tools) {
             $dest = Join-Path $installDir $t.Name
             try { Move-Item -Force -LiteralPath $t.Temp -Destination $dest }
-            catch { Write-Warning "Could not replace $($t.Name) (in use?); run the update again later." ; if (-not (Test-Path -LiteralPath $dest)) { throw } }
+            catch { ViWarn "Could not replace $($t.Name) (in use?); run the update again later." ; if (-not (Test-Path -LiteralPath $dest)) { throw } }
             $files += [ordered]@{ path = $dest; kind = 'tool'; name = $t.Name; version = $entry.version; sha256 = $t.Sha }
             $wrapper = Join-Path $installDir ($t.Name -replace '\.ps1$', '.cmd')
             $wtext = "@echo off`r`npowershell.exe -NoProfile -ExecutionPolicy Bypass -File `"%~dp0$($t.Name)`" %*`r`nexit /b %errorlevel%`r`n"
@@ -548,6 +921,7 @@ function ViInvokeInstall {
                     $lnk = Join-Path $pl "$label.lnk"
                     ViShortcut $lnk $target $sargs $installDir "$appName" $icon
                     $shortcuts += $lnk
+                    if (-not $ViState.Launch) { $ViState.Launch = $lnk; $ViState.LaunchLabel = $label }
                     ViInfo "Shortcut: $lnk"
                 }
             }
@@ -575,7 +949,7 @@ function ViInvokeInstall {
                         $a = ViAssocAdd $fa $cmd $ficon
                         $associations += $a
                         ViInfo ("Opens {0} files{1}" -f $fa.extension, $(if ($a.isDefault) { ' (default)' } else { ' (listed under Open with)' }))
-                    } catch { Write-Warning "Could not register $($fa.extension): $($_.Exception.Message)" }
+                    } catch { ViWarn "Could not register $($fa.extension): $($_.Exception.Message)" }
                 }
             }
         }
@@ -623,7 +997,7 @@ function ViInvokeInstall {
             $keptProgIds = @($associations | ForEach-Object { $_.progId })
             foreach ($a in @($old.fileAssociations)) {
                 if ($a -and $a.progId -and ($keptProgIds -notcontains $a.progId)) {
-                    try { ViAssocRemove $a } catch { Write-Warning "Could not unregister $($a.extension): $($_.Exception.Message)" }
+                    try { ViAssocRemove $a } catch { ViWarn "Could not unregister $($a.extension): $($_.Exception.Message)" }
                 }
             }
         }
@@ -694,14 +1068,14 @@ function ViInvokeInstall {
         New-ItemProperty -Path $uninstallKey -Name NoRepair -Value 1 -PropertyType DWord -Force | Out-Null
         New-ItemProperty -Path $uninstallKey -Name EstimatedSize -Value $sizeKb -PropertyType DWord -Force | Out-Null
 
-        Write-Host ""
-        Write-Host "$appName $($entry.version) installed." -ForegroundColor Green
-        Write-Host "    Location:  $installDir"
-        Write-Host "    Manifest:  $recPath"
-        Write-Host "    Update:    $(Join-Path $installDir 'update.cmd')"
-        Write-Host "    Uninstall: $uninstallCmd   (or Settings > Apps)"
-        if ($tools | Where-Object { $_.Name -eq 'diagnose.ps1' }) { Write-Host "    Diagnose:  $(Join-Path $installDir 'diagnose.cmd')   (a report to attach to bug reports)" }
-        if ($pathEntries.Count -gt 0) { Write-Host "    Open a new terminal for PATH changes to take effect." }
+        ViSay ""
+        ViSay "$appName $($entry.version) installed." Green
+        ViSay "    Location:  $installDir"
+        ViSay "    Manifest:  $recPath"
+        ViSay "    Update:    $(Join-Path $installDir 'update.cmd')"
+        ViSay "    Uninstall: $uninstallCmd   (or Settings > Apps)"
+        if ($tools | Where-Object { $_.Name -eq 'diagnose.ps1' }) { ViSay "    Diagnose:  $(Join-Path $installDir 'diagnose.cmd')   (a report to attach to bug reports)" }
+        if ($pathEntries.Count -gt 0) { ViSay "    Open a new terminal for PATH changes to take effect." }
         return $true
     } finally {
         Remove-Item -Recurse -Force -LiteralPath $tmp -ErrorAction SilentlyContinue
@@ -709,6 +1083,7 @@ function ViInvokeInstall {
 }
 
 $ViArgs = @{}
+$ViQuiet = $false
 if ($env:INSTALL_VERSION) { $ViArgs.Version = $env:INSTALL_VERSION }
 if ($env:INSTALL_DIR) { $ViArgs.Dir = $env:INSTALL_DIR }
 if ($env:INSTALL_FORCE) { $ViArgs.Force = $true }
@@ -721,25 +1096,34 @@ for ($ViI = 0; $ViI -lt $args.Count; $ViI++) {
         '^-NoAssociations$' { $ViArgs.NoAssociations = $true }
         '^-Force$' { $ViArgs.Force = $true }
         '^-SkipChecks$' { $ViArgs.SkipChecks = $true }
+        '^-Quiet$' { $ViQuiet = $true }
         default { Write-Warning "Ignoring unknown argument: $($args[$ViI])" }
     }
 }
 if ($env:INSTALL_SKIP_CHECKS -and $env:INSTALL_SKIP_CHECKS -ne '0') { $ViArgs.SkipChecks = $true }
 $ViOk = $false
-# what ViInvokeInstall leaves for a failure report: diagnose.ps1's text, and the report if one was written
-$ViState = @{ DiagText = $null; Report = $null }
+$ViErr = $null
+# what ViInvokeInstall leaves for a failure report (diagnose.ps1's text, and the report if one was written)
+# and for the window's last page
+$ViState = @{ DiagText = $null; Report = $null; Cancelled = $false; Version = $null; Dir = $null; Launch = $null; LaunchLabel = $null }
+$ViUi = $null
+if (ViWantsWindow $ViQuiet) {
+    try { $ViUi = ViUiOpen } catch { $ViUi = $null; Write-Warning "Could not open the installer window ($($_.Exception.Message)); continuing here." }
+}
 try {
     $ViOk = [bool](ViInvokeInstall @ViArgs | Select-Object -Last 1)
 } catch {
     $ViErr = $_.Exception.Message
-    Write-Host "ERROR: $ViErr" -ForegroundColor Red
-    if ($ViState.DiagText -and -not $ViState.Report) {
-        Write-Host "Writing a diagnostic report..."
+    ViSay "ERROR: $ViErr" Red
+    if ($ViState.DiagText -and -not $ViState.Report -and -not $ViState.Cancelled) {
+        ViSay "Writing a diagnostic report..."
         try { $ViState.Report = (& ([scriptblock]::Create($ViState.DiagText)) -Check -InstallError $ViErr | Select-Object -Last 1).report } catch { }
     }
     if ($ViState.Report) {
-        Write-Host "Diagnostic report: $($ViState.Report)" -ForegroundColor Yellow
-        if ($InstallerCfg.issuesUrl) { Write-Host "To report the problem, attach it at $($InstallerCfg.issuesUrl)" }
+        ViSay "Diagnostic report: $($ViState.Report)" Yellow
+        if ($InstallerCfg.issuesUrl) { ViSay "To report the problem, attach it at $($InstallerCfg.issuesUrl)" }
     }
+} finally {
+    if ($ViUi) { ViUiFinish $ViOk $ViErr; $ViUi = $null }
 }
 if (-not $ViOk -and $PSCommandPath) { exit 1 }

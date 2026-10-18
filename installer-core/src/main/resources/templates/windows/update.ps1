@@ -86,7 +86,7 @@ function ViInvokeUpdate {
     try {
         Invoke-WebRequest -UseBasicParsing -Uri $t.url -OutFile $tmp
         if ((ViSha $tmp) -ne $t.sha256) { throw "Checksum mismatch for install.ps1 downloaded from $($t.url). Update aborted." }
-        $childArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $tmp, '-Version', $manifest.latest, '-Dir', $rec.installDir, '-Force')
+        $childArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $tmp, '-Version', $manifest.latest, '-Dir', $rec.installDir, '-Force', '-Quiet')
         & powershell.exe @childArgs | Out-Host
         if ($LASTEXITCODE -ne 0) { throw "The installer exited with code $LASTEXITCODE." }
     } finally {
