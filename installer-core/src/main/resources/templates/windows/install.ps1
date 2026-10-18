@@ -647,6 +647,216 @@ function ViDownload([string]$url, [string]$out, [string]$label) {
     } finally { $resp.Close() }
 }
 
+# ---- transaction -----------------------------------------------------------------------
+# Every file the install writes goes through ViTxPut. The file it replaces is first renamed into a backup
+# folder (a rename, so even a running .exe can be replaced), and a line in <registryDir>\<id>.journal says
+# what is about to happen before it does. A failure plays the journal backwards; a run that was killed is
+# rolled back by the next one, or finished if it got as far as its commit line. Files in the install folder
+# are backed up inside it, so their renames stay on one volume.
+
+function ViTxBegin([string]$id, [string]$installDir, [string]$tmp) {
+    $regDir = ViRegistryDir
+    ViEnsureDir $regDir
+    $tag = [guid]::NewGuid().ToString('N').Substring(0, 8)
+    $tx = [pscustomobject]@{
+        Journal = Join-Path $regDir "$id.journal"
+        InstallDir = $installDir
+        Backup = Join-Path $installDir ".vi-backup-$tag"
+        OtherBackup = Join-Path (Split-Path $regDir -Parent) "backup\$id-$tag"
+        Tmp = $tmp
+        Puts = 0
+        N = 0
+    }
+    ViTxLog $tx @{ op = 'begin'; installDir = $installDir; backup = $tx.Backup; otherBackup = $tx.OtherBackup; at = (Get-Date).ToString('o') }
+    $tx
+}
+
+function ViTxLog($tx, $entry) {
+    [IO.File]::AppendAllText($tx.Journal, (($entry | ConvertTo-Json -Compress -Depth 6) + "`n"), (New-Object Text.UTF8Encoding $false))
+}
+
+# Creates a folder and any missing parents, journalling each so a rollback removes them again (when empty).
+function ViTxDir($tx, [string]$dir) {
+    if (-not $dir -or (Test-Path -LiteralPath $dir)) { return }
+    $missing = @()
+    $d = $dir
+    while ($d -and -not (Test-Path -LiteralPath $d)) { $missing = @($d) + $missing; $d = Split-Path $d -Parent }
+    foreach ($m in $missing) {
+        ViTxLog $tx @{ op = 'dir'; d = $m }
+        New-Item -ItemType Directory -Path $m | Out-Null
+    }
+}
+
+function ViTxBackupPath($tx, [string]$path) {
+    $root = $tx.InstallDir.TrimEnd('\') + '\'
+    if ($path.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { return Join-Path $tx.Backup $path.Substring($root.Length) }
+    $tx.N++
+    Join-Path $tx.OtherBackup ("{0}-{1}" -f $tx.N, (Split-Path $path -Leaf))
+}
+
+# Moves an existing file into the backup. A file held open (a jar a running JVM has, say) is offered to be
+# closed (ViCloseRunning); if it cannot be, the install fails and is rolled back.
+function ViTxAside($tx, [string]$path) {
+    $b = ViTxBackupPath $tx $path
+    ViTxLog $tx @{ op = 'put'; t = $path; b = $b }
+    ViEnsureDir (Split-Path $b -Parent)
+    for ($try = 0; ; $try++) {
+        try { [IO.File]::Move($path, $b); break }
+        catch {
+            $why = if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message }
+            if ($try -ge 1 -or -not (ViCloseRunning $tx.InstallDir $path)) {
+                throw "Could not replace ${path}: $why Close $($InstallerCfg.name) and run the install again, or set INSTALL_CLOSE_APPS=1 to have it closed."
+            }
+        }
+    }
+}
+
+# Puts $src (a file in the temp folder) at $dst, backing up what was there.
+function ViTxPut($tx, [string]$src, [string]$dst) {
+    ViTxDir $tx (Split-Path $dst -Parent)
+    if (Test-Path -LiteralPath $dst) { ViTxAside $tx $dst } else { ViTxLog $tx @{ op = 'put'; t = $dst; b = $null } }
+    Move-Item -Force -LiteralPath $src -Destination $dst
+    ViTxFault $tx
+}
+
+# Writes a small file through ViTxPut, or leaves it alone when it already says exactly that.
+function ViTxPutText($tx, [string]$dst, [string]$text) {
+    if ((Test-Path -LiteralPath $dst) -and ([IO.File]::ReadAllText($dst) -ceq $text)) { return }
+    $t = Join-Path $tx.Tmp ("t-" + [guid]::NewGuid().ToString('N'))
+    ViWriteText $t $text
+    ViTxPut $tx $t $dst
+}
+
+# For tests only: INSTALL_TEST_FAULT=throw:<n> or exit:<n> fails, or kills the process, after the n-th file
+# is put in place; throw:commit and exit:commit do it just before the commit.
+function ViTxFault($tx, [string]$point = 'put') {
+    if (-not $env:INSTALL_TEST_FAULT) { return }
+    $how, $at = $env:INSTALL_TEST_FAULT -split ':'
+    if ($point -eq 'put') { $tx.Puts++; if ($at -ne [string]$tx.Puts) { return } }
+    elseif ($at -ne $point) { return }
+    if ($how -eq 'exit') { [Environment]::Exit(9) }
+    throw "Test fault at $($env:INSTALL_TEST_FAULT)."
+}
+
+function ViTxCommit($tx) {
+    ViTxFault $tx 'commit'
+    ViTxLog $tx @{ op = 'commit' }
+    ViTxFinish $tx.Journal
+}
+
+function ViTxRead([string]$journal) {
+    @(Get-Content -LiteralPath $journal -ErrorAction SilentlyContinue | Where-Object { $_.Trim() } | ForEach-Object { try { $_ | ConvertFrom-Json } catch { } })
+}
+
+# After the commit: the backups go (a running .exe in one may refuse until it exits; the next run retries),
+# then the journal.
+function ViTxFinish([string]$journal) {
+    $begin = ViTxRead $journal | Where-Object { $_.op -eq 'begin' } | Select-Object -First 1
+    $left = $false
+    foreach ($b in @($begin.backup, $begin.otherBackup)) {
+        if ($b -and (Test-Path -LiteralPath $b)) {
+            Remove-Item -Recurse -Force -LiteralPath $b -ErrorAction SilentlyContinue
+            if (Test-Path -LiteralPath $b) { $left = $true }
+        }
+    }
+    if (-not $left) { Remove-Item -Force -LiteralPath $journal -ErrorAction SilentlyContinue }
+}
+
+# Plays a journal backwards: replaced files come back, new files and folders go, PATH entries and file
+# types it added are taken out again. Returns $false when something could not be put back (the journal
+# then stays, for the next run to try again).
+function ViTxRollback([string]$journal) {
+    $lines = ViTxRead $journal
+    $ok = $true
+    for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+        $e = $lines[$i]
+        try {
+            switch ($e.op) {
+                'put' {
+                    if ($e.b -and (Test-Path -LiteralPath $e.b)) {
+                        if (Test-Path -LiteralPath $e.t) { Remove-Item -Force -LiteralPath $e.t }
+                        ViEnsureDir (Split-Path $e.t -Parent)
+                        [IO.File]::Move($e.b, $e.t)
+                    } elseif (-not $e.b -and (Test-Path -LiteralPath $e.t)) { Remove-Item -Force -LiteralPath $e.t }
+                }
+                'dir' { if ((Test-Path -LiteralPath $e.d) -and -not (Get-ChildItem -LiteralPath $e.d -Force)) { Remove-Item -Force -LiteralPath $e.d } }
+                'path' { ViPathRemove $e.dir }
+                'assoc' { ViAssocRemove $e.a }
+            }
+        } catch {
+            $ok = $false
+            ViWarn "Could not undo $($e.op) $($e.t)$($e.d)$($e.dir): $($_.Exception.Message)"
+        }
+    }
+    if (@($lines | Where-Object { $_.op -eq 'assoc' }).Count -gt 0) { ViNotifyAssoc }
+    if ($ok) {
+        $begin = $lines | Where-Object { $_.op -eq 'begin' } | Select-Object -First 1
+        foreach ($b in @($begin.backup, $begin.otherBackup)) {
+            if ($b -and (Test-Path -LiteralPath $b)) { Remove-Item -Recurse -Force -LiteralPath $b -ErrorAction SilentlyContinue }
+        }
+        Remove-Item -Force -LiteralPath $journal -ErrorAction SilentlyContinue
+    }
+    $ok
+}
+
+# A journal left by an earlier run: finished if it committed, rolled back if not.
+function ViTxRecover([string]$journal) {
+    if (-not (Test-Path -LiteralPath $journal)) { return }
+    $lines = ViTxRead $journal
+    if (@($lines | Where-Object { $_.op -eq 'commit' }).Count -gt 0) { ViTxFinish $journal; return }
+    ViWarn "The last install of $($InstallerCfg.name) did not finish; putting back what it had replaced."
+    if (-not (ViTxRollback $journal)) { throw "The unfinished install could not be undone completely (see the warnings above). Close $($InstallerCfg.name) and try again." }
+    ViInfo "Put back."
+}
+
+# Processes started from the install folder (by path, or with it on their command line, as a JVM running a
+# jar has), leaving out this one and its parents (update.cmd runs from there). With INSTALL_CLOSE_APPS=1, or
+# when the window asks and the answer is yes, they are closed: politely, then forcibly after ten seconds.
+function ViRunningFrom([string]$dir) {
+    $root = $dir.TrimEnd('\') + '\'
+    $all = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+    $byId = @{}
+    foreach ($p in $all) { $byId[[int]$p.ProcessId] = $p }
+    $mine = @{}
+    $c = [int]$PID
+    while ($c -and $byId.ContainsKey($c) -and -not $mine.ContainsKey($c)) { $mine[$c] = $true; $c = [int]$byId[$c].ParentProcessId }
+    @($all | Where-Object {
+        -not $mine.ContainsKey([int]$_.ProcessId) -and (
+            ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) -or
+            ($_.CommandLine -and $_.CommandLine.IndexOf($root, [StringComparison]::OrdinalIgnoreCase) -ge 0))
+    })
+}
+
+function ViCloseRunning([string]$dir, [string]$path) {
+    $procs = ViRunningFrom $dir
+    if ($procs.Count -eq 0) { return $false }
+    $names = ($procs | ForEach-Object { "$($_.Name) (process $($_.ProcessId))" }) -join ', '
+    $yes = $env:INSTALL_CLOSE_APPS -and $env:INSTALL_CLOSE_APPS -ne '0'
+    if (-not $yes -and $ViUi -and -not $ViUi.Closed) {
+        $yes = ViUiAsk "$(Split-Path $path -Leaf) is in use by $names, so it cannot be replaced.`n`nClose it and continue?"
+    }
+    if (-not $yes) { ViWarn "$(Split-Path $path -Leaf) is in use by $names."; return $false }
+    ViInfo "Closing $names"
+    $live = @($procs | ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue } | Where-Object { $_ })
+    foreach ($p in $live) { try { [void]$p.CloseMainWindow() } catch { } }
+    $until = (Get-Date).AddSeconds(10)
+    while ((Get-Date) -lt $until -and @($live | Where-Object { -not $_.HasExited }).Count -gt 0) {
+        if ($ViUi -and -not $ViUi.Closed) { [Windows.Forms.Application]::DoEvents() }
+        Start-Sleep -Milliseconds 200
+    }
+    foreach ($p in $live) { if (-not $p.HasExited) { try { $p.Kill(); [void]$p.WaitForExit(5000) } catch { } } }
+    Start-Sleep -Milliseconds 300
+    return $true
+}
+
+# One install of an application at a time: the lock is a file held open until the run ends.
+function ViLock([string]$id) {
+    $regDir = ViRegistryDir
+    ViEnsureDir $regDir
+    try { return [IO.File]::Open((Join-Path $regDir "$id.lock"), 'OpenOrCreate', 'ReadWrite', 'None') }
+    catch { throw "Another install, update or removal of $($InstallerCfg.name) is running. Let it finish, then try again." }
+}
+
 # ---- install ---------------------------------------------------------------------------
 
 function ViOptOut([bool]$switch, [string]$envValue, $stored) {
@@ -689,6 +899,8 @@ function ViInvokeInstall {
 
     $regDir = ViRegistryDir
     $recPath = Join-Path $regDir "$id.json"
+    $ViState.Lock = ViLock $id
+    ViTxRecover (Join-Path $regDir "$id.journal")
     $old = $null
     if (Test-Path -LiteralPath $recPath) {
         try { $old = Get-Content -Raw -LiteralPath $recPath | ConvertFrom-Json } catch { }
@@ -836,23 +1048,25 @@ function ViInvokeInstall {
             ViCheckSignature $dl $b.signature $b.file
             $staged += [pscustomobject]@{ Bin = $b; Target = $target; Temp = $dl; Icon = $ic; FileIcons = $fic }
         }
-        # 2. place files; from here on the install is not cancelled halfway
+        # 2. place files; from here on the install is not cancelled halfway, and everything it changes goes
+        # through the journal (see ViTxBegin) until the commit, so a failure puts the last install back
         ViUiPhase 'busy'
         ViStep "Installing to $installDir"
-        ViEnsureDir $installDir
+        $tx = ViTxBegin $id $installDir $tmp
+        try {
+        ViTxDir $tx $installDir
         $files = @()
         $archives = @()
         foreach ($s in $staged) {
             if ($s.Bin.kind -eq 'archive') {
-                ViEnsureDir $s.Target
+                ViTxDir $tx $s.Target
                 if ($s.Extracted) {
                     $xroot = $s.Extracted.TrimEnd('\')
                     foreach ($f in @(Get-ChildItem -LiteralPath $xroot -Recurse -File -Force)) {
                         $dest = Join-Path $s.Target $f.FullName.Substring($xroot.Length).TrimStart('\')
-                        ViEnsureDir (Split-Path $dest -Parent)
-                        try { Move-Item -Force -LiteralPath $f.FullName -Destination $dest }
-                        catch { throw "Could not write ${dest}: $($_.Exception.Message) Close $appName if it is running and try again." }
+                        ViTxPut $tx $f.FullName $dest
                         $files += [ordered]@{ path = $dest; kind = 'archive-file'; name = $s.Bin.name; version = $s.Bin.version; sha256 = $null }
+                        if ($ViUi -and -not $ViUi.Closed) { [Windows.Forms.Application]::DoEvents() }
                     }
                 } else {
                     foreach ($f in @($old.files)) { if ($f.kind -eq 'archive-file' -and $f.name -eq $s.Bin.name) { $files += $f } }
@@ -860,47 +1074,48 @@ function ViInvokeInstall {
                 $archives += [ordered]@{ name = $s.Bin.name; version = $s.Bin.version; sha256 = $s.Bin.sha256; dir = $s.Target }
                 continue
             }
-            ViEnsureDir (Split-Path $s.Target -Parent)
-            if ($s.Temp) {
-                try { Move-Item -Force -LiteralPath $s.Temp -Destination $s.Target }
-                catch { throw "Could not write $($s.Target): $($_.Exception.Message) Close $appName if it is running and try again." }
-            }
+            if ($s.Temp) { ViTxPut $tx $s.Temp $s.Target }
             try { Unblock-File -LiteralPath $s.Target } catch { }
             $files += [ordered]@{ path = $s.Target; kind = 'binary'; name = $s.Bin.name; version = $s.Bin.version; sha256 = $s.Bin.sha256 }
             if ($s.Icon) {
-                ViEnsureDir (Split-Path $s.Icon.Target -Parent)
-                if ($s.Icon.Temp) { Move-Item -Force -LiteralPath $s.Icon.Temp -Destination $s.Icon.Target }
+                if ($s.Icon.Temp) { ViTxPut $tx $s.Icon.Temp $s.Icon.Target }
                 $files += [ordered]@{ path = $s.Icon.Target; kind = 'icon'; name = $s.Bin.name; version = $s.Bin.version; sha256 = $s.Icon.Meta.sha256 }
             }
             foreach ($fi in @($s.FileIcons | Where-Object { $_ })) {
-                ViEnsureDir (Split-Path $fi.Target -Parent)
-                if ($fi.Temp) { Move-Item -Force -LiteralPath $fi.Temp -Destination $fi.Target }
+                if ($fi.Temp) { ViTxPut $tx $fi.Temp $fi.Target }
                 $files += [ordered]@{ path = $fi.Target; kind = 'file-icon'; name = $s.Bin.name; version = $s.Bin.version; sha256 = $fi.Meta.sha256 }
             }
             if ($s.Bin.kind -eq 'jar') {
                 $launcher = ViExpand $s.Bin.launcher.Replace('{installDir}', $installDir)
-                ViWriteText $launcher (ViJarLauncher $s.Bin (Split-Path $s.Target -Leaf))
+                ViTxPutText $tx $launcher (ViJarLauncher $s.Bin (Split-Path $s.Target -Leaf))
                 $files += [ordered]@{ path = $launcher; kind = 'launcher'; name = $s.Bin.name; version = $s.Bin.version; sha256 = (ViSha $launcher) }
             }
         }
         foreach ($t in $tools) {
             $dest = Join-Path $installDir $t.Name
-            try { Move-Item -Force -LiteralPath $t.Temp -Destination $dest }
-            catch { ViWarn "Could not replace $($t.Name) (in use?); run the update again later." ; if (-not (Test-Path -LiteralPath $dest)) { throw } }
+            if (-not ((Test-Path -LiteralPath $dest) -and (ViSha $dest) -eq $t.Sha)) { ViTxPut $tx $t.Temp $dest }
             $files += [ordered]@{ path = $dest; kind = 'tool'; name = $t.Name; version = $entry.version; sha256 = $t.Sha }
             $wrapper = Join-Path $installDir ($t.Name -replace '\.ps1$', '.cmd')
             $wtext = "@echo off`r`npowershell.exe -NoProfile -ExecutionPolicy Bypass -File `"%~dp0$($t.Name)`" %*`r`nexit /b %errorlevel%`r`n"
-            ViWriteText $wrapper $wtext
+            ViTxPutText $tx $wrapper $wtext
             $files += [ordered]@{ path = $wrapper; kind = 'tool'; name = (Split-Path $wrapper -Leaf); version = $entry.version; sha256 = (ViSha $wrapper) }
         }
 
         # other installs' launchers read this to find this install (see ViJarLauncher)
-        ViEnsureDir $regDir
         $pointer = Join-Path $regDir "$id.home"
-        ViWriteText $pointer "$installDir`r`n"
+        ViTxPutText $tx $pointer "$installDir`r`n"
         $files += [ordered]@{ path = $pointer; kind = 'pointer'; name = "$id.home"; version = $entry.version; sha256 = (ViSha $pointer) }
 
-        # 3. shortcuts
+        # what the last install had and this one does not goes into the backup too, so a rollback restores it
+        if ($old) {
+            $newPaths = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+            foreach ($nf in $files) { [void]$newPaths.Add([string]$nf.path) }
+            foreach ($f in @($old.files)) {
+                if ($f.path -and (-not $newPaths.Contains([string]$f.path)) -and (Test-Path -LiteralPath $f.path -PathType Leaf)) { ViTxAside $tx $f.path }
+            }
+        }
+
+        # 3. shortcuts: written in the temp folder, then put in place like any other file
         $shortcuts = @()
         if (-not $skipShortcuts) {
             foreach ($s in $staged) {
@@ -922,7 +1137,9 @@ function ViInvokeInstall {
                 if ($sc.startMenu) { $places += [Environment]::GetFolderPath('Programs') }
                 foreach ($pl in $places) {
                     $lnk = Join-Path $pl "$label.lnk"
-                    ViShortcut $lnk $target $sargs $installDir "$appName" $icon
+                    $tlnk = Join-Path $tmp ("s-" + [guid]::NewGuid().ToString('N') + '.lnk')
+                    ViShortcut $tlnk $target $sargs $installDir "$appName" $icon
+                    ViTxPut $tx $tlnk $lnk
                     $shortcuts += $lnk
                     if (-not $ViState.Launch) { $ViState.Launch = $lnk; $ViState.LaunchLabel = $label }
                     ViInfo "Shortcut: $lnk"
@@ -949,7 +1166,10 @@ function ViInvokeInstall {
                         if ($own) { $ficon = $own.Target }
                     }
                     try {
+                        $had = @($old.fileAssociations | Where-Object { $_ -and $_.progId -eq $fa.progId }).Count -gt 0
+                        if (-not $had) { ViTxLog $tx @{ op = 'assoc'; a = [ordered]@{ extension = $fa.extension; progId = $fa.progId; contentType = $null } } }
                         $a = ViAssocAdd $fa $cmd $ficon
+                        if (-not $had) { ViTxLog $tx @{ op = 'assoc'; a = $a } }
                         $associations += $a
                         ViInfo ("Opens {0} files{1}" -f $fa.extension, $(if ($a.isDefault) { ' (default)' } else { ' (listed under Open with)' }))
                     } catch { ViWarn "Could not register $($fa.extension): $($_.Exception.Message)" }
@@ -968,45 +1188,20 @@ function ViInvokeInstall {
                 if ($wanted -notcontains $d) { $wanted += $d }
             }
             foreach ($d in $wanted) {
+                $onPath = @(([string](ViUserPathGet)) -split ';' | Where-Object { $_ -and (ViPathNorm $_) -eq (ViPathNorm $d) }).Count -gt 0
+                if (-not $onPath) { ViTxLog $tx @{ op = 'path'; dir = $d } }
                 $added = ViPathAdd $d
                 if ($added -or ($old -and (@($old.pathEntries) -contains $d))) { $pathEntries += $d }
                 if ($added) { ViInfo "Added to user PATH: $d" }
             }
         }
 
-        # 6. clean up whatever the previous install had that this one does not
-        if ($old) {
-            $newPaths = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
-            foreach ($nf in $files) { [void]$newPaths.Add([string]$nf.path) }
-            foreach ($f in @($old.files)) {
-                if ($f.path -and (-not $newPaths.Contains([string]$f.path)) -and (Test-Path -LiteralPath $f.path)) {
-                    Remove-Item -Force -LiteralPath $f.path -ErrorAction SilentlyContinue
-                }
-            }
-            # an updated archive may have dropped folders; remove the ones left empty
-            foreach ($a in $archives) {
-                if (-not (Test-Path -LiteralPath $a.dir)) { continue }
-                Get-ChildItem -LiteralPath $a.dir -Directory -Recurse -Force |
-                    Sort-Object { $_.FullName.Length } -Descending |
-                    Where-Object { -not (Get-ChildItem -LiteralPath $_.FullName -Force) } |
-                    Remove-Item -Force -ErrorAction SilentlyContinue
-            }
-            foreach ($l in @($old.shortcuts)) {
-                if ($l -and ($shortcuts -notcontains $l) -and (Test-Path -LiteralPath $l)) { Remove-Item -Force -LiteralPath $l -ErrorAction SilentlyContinue }
-            }
-            foreach ($d in @($old.pathEntries)) {
-                if ($d -and ($pathEntries -notcontains $d)) { ViPathRemove $d }
-            }
-            $keptProgIds = @($associations | ForEach-Object { $_.progId })
-            foreach ($a in @($old.fileAssociations)) {
-                if ($a -and $a.progId -and ($keptProgIds -notcontains $a.progId)) {
-                    try { ViAssocRemove $a } catch { ViWarn "Could not unregister $($a.extension): $($_.Exception.Message)" }
-                }
-            }
+        # 6. shortcuts the last install made and this one does not
+        foreach ($l in @($old.shortcuts)) {
+            if ($l -and ($shortcuts -notcontains $l) -and (Test-Path -LiteralPath $l -PathType Leaf)) { ViTxAside $tx $l }
         }
-        if ($associations.Count -gt 0 -or @($old.fileAssociations | Where-Object { $_ }).Count -gt 0) { ViNotifyAssoc }
 
-        # 7. install manifest + uninstall registration
+        # 7. install manifest, then the commit
         # `commands` is how other installed programs find and start these binaries without
         # relying on PATH: name -> absolute path to run (the .cmd launcher for a jar).
         $commands = [ordered]@{}
@@ -1047,9 +1242,38 @@ function ViInvokeInstall {
             registryKeys  = @($uninstallKey)
         }
         $json = $record | ConvertTo-Json -Depth 10
-        ViEnsureDir $regDir
-        ViWriteText $recPath $json
-        ViWriteText (Join-Path $installDir 'install-manifest.json') $json
+        ViTxPutText $tx (Join-Path $installDir 'install-manifest.json') $json
+        ViTxPutText $tx $recPath $json
+        ViTxCommit $tx
+        } catch {
+            $err = $_.Exception.Message
+            $back = ViTxRollback $tx.Journal
+            $what = if (-not $back) { 'Not everything could be put back; the next install of it will try again.' }
+                    elseif ($old) { "$appName $($old.version) was put back as it was." } else { 'Nothing was left installed.' }
+            throw "$err $what"
+        }
+
+        # 8. after the commit: what the last install registered and this one does not, and the Apps entry
+        if ($old) {
+            # an updated archive may have dropped folders; remove the ones left empty
+            foreach ($a in $archives) {
+                if (-not (Test-Path -LiteralPath $a.dir)) { continue }
+                Get-ChildItem -LiteralPath $a.dir -Directory -Recurse -Force |
+                    Sort-Object { $_.FullName.Length } -Descending |
+                    Where-Object { -not (Get-ChildItem -LiteralPath $_.FullName -Force) } |
+                    Remove-Item -Force -ErrorAction SilentlyContinue
+            }
+            foreach ($d in @($old.pathEntries)) {
+                if ($d -and ($pathEntries -notcontains $d)) { ViPathRemove $d }
+            }
+            $keptProgIds = @($associations | ForEach-Object { $_.progId })
+            foreach ($a in @($old.fileAssociations)) {
+                if ($a -and $a.progId -and ($keptProgIds -notcontains $a.progId)) {
+                    try { ViAssocRemove $a } catch { ViWarn "Could not unregister $($a.extension): $($_.Exception.Message)" }
+                }
+            }
+        }
+        if ($associations.Count -gt 0 -or @($old.fileAssociations | Where-Object { $_ }).Count -gt 0) { ViNotifyAssoc }
 
         New-Item -Path $uninstallKey -Force | Out-Null
         $uninstallCmd = Join-Path $installDir 'uninstall.cmd'
@@ -1127,6 +1351,7 @@ try {
         if ($InstallerCfg.issuesUrl) { ViSay "To report the problem, attach it at $($InstallerCfg.issuesUrl)" }
     }
 } finally {
+    if ($ViState.Lock) { $ViState.Lock.Dispose(); $ViState.Lock = $null }
     if ($ViUi) { ViUiFinish $ViOk $ViErr; $ViUi = $null }
 }
 if (-not $ViOk -and $PSCommandPath) { exit 1 }

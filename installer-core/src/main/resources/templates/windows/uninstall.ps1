@@ -127,6 +127,20 @@ function ViRemoveOne($rec) {
     $mf = Join-Path $rec.installDir 'install-manifest.json'
     if (Test-Path -LiteralPath $mf) { Remove-Item -Force -LiteralPath $mf -ErrorAction SilentlyContinue }
     if ($rec.recordPath -and (Test-Path -LiteralPath $rec.recordPath)) { Remove-Item -Force -LiteralPath $rec.recordPath }
+    # what an install's transaction leaves: backups not yet removed (a .exe that was running), its journal and lock
+    if (Test-Path -LiteralPath $rec.installDir) {
+        Get-ChildItem -LiteralPath $rec.installDir -Directory -Force -Filter '.vi-backup-*' | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    $regDir = ViRegistryDir
+    $ob = Join-Path (Split-Path $regDir -Parent) 'backup'
+    if (Test-Path -LiteralPath $ob) {
+        Get-ChildItem -LiteralPath $ob -Directory -Force -Filter "$($rec.id)-*" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+        if (-not (Get-ChildItem -LiteralPath $ob -Force)) { Remove-Item -Force -LiteralPath $ob -ErrorAction SilentlyContinue }
+    }
+    foreach ($ext in 'journal', 'lock') {
+        $p = Join-Path $regDir "$($rec.id).$ext"
+        if (Test-Path -LiteralPath $p) { Remove-Item -Force -LiteralPath $p -ErrorAction SilentlyContinue }
+    }
 
     # prune empty directories, deepest first; anything the user added stays
     if (Test-Path -LiteralPath $rec.installDir) {

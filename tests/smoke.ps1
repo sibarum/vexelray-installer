@@ -195,6 +195,79 @@ try {
     Check (-not (Test-Path $installDir) -and -not (ClassKey '.vismoke')) 'opted-out install uninstalled'
     Check (([Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment').GetValue('Path', '', 'DoNotExpandEnvironmentNames')) -eq $pathBefore) 'user PATH restored again'
 
+    # ---- the install is a transaction ------------------------------------------------------
+    function Inst([hashtable]$envs) {
+        foreach ($k in $envs.Keys) { [Environment]::SetEnvironmentVariable($k, $envs[$k], 'Process') }
+        $o = powershell -NoProfile -ExecutionPolicy Bypass -File "$root\site\install.ps1" 2>&1 | Out-String
+        $script:instExit = $LASTEXITCODE
+        foreach ($k in $envs.Keys) { [Environment]::SetEnvironmentVariable($k, $null, 'Process') }
+        $o -split "`n" | ForEach-Object { if ($_.Trim()) { Write-Host "    | $($_.TrimEnd())" } }
+        $o
+    }
+    function NoLeftovers { -not (Test-Path "$regDir\vi-smoke.journal") -and @(Get-ChildItem $installDir -Force -Filter '.vi-backup-*' -ErrorAction SilentlyContinue).Count -eq 0 }
+    $where = (Get-Item "$env:windir\System32\where.exe").Length
+
+    Write-Host "a fresh install that fails before its commit leaves nothing behind"
+    $out = Inst @{ INSTALL_VERSION = '1.0.0'; INSTALL_TEST_FAULT = 'throw:commit' }
+    Check ($out -match 'Test fault' -and $out -match 'Nothing was left installed') 'the failure says nothing was left'
+    Check (-not (Test-Path $installDir) -and -not (Test-Path "$regDir\vi-smoke.json") -and -not (Test-Path "$regDir\vi-smoke.home")) 'no files, folder or record'
+    Check (-not (Test-Path "$desktop\ViSmoke.lnk") -and -not (ClassKey '.vismoke') -and -not (ClassKey 'vi-smoke.vismoke')) 'no shortcuts or file types'
+    Check (([Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment').GetValue('Path', '', 'DoNotExpandEnvironmentNames')) -eq $pathBefore) 'PATH as it was'
+    Check (-not (Test-Path "$regDir\vi-smoke.journal")) 'journal gone'
+
+    Write-Host "an update that fails before its commit puts the last version back"
+    $out = Inst @{ INSTALL_VERSION = '1.0.0' }
+    $sha0 = (Get-FileHash "$installDir\app.exe").Hash
+    $out = Inst @{ INSTALL_TEST_FAULT = 'throw:commit' }
+    $recT = Get-Content -Raw "$regDir\vi-smoke.json" | ConvertFrom-Json
+    Check ($out -match '1\.0\.0 was put back') 'the failure says 1.0.0 was put back'
+    Check ($recT.version -eq '1.0.0' -and (Get-FileHash "$installDir\app.exe").Hash -eq $sha0) 'record and app.exe are 1.0.0 again'
+    Check ((Test-Path "$installDir\app-doc.ico") -and (ClassKey 'vi-smoke.vismokej')) 'what 1.1.0 drops is still there'
+    Check ((Test-Path "$desktop\ViSmoke.lnk") -and (NoLeftovers)) 'shortcuts kept, no journal or backup left'
+
+    Write-Host "an update killed halfway is rolled back by the next run, which then installs"
+    $out = Inst @{ INSTALL_TEST_FAULT = 'exit:4' }
+    Check ($instExit -eq 9 -and (Test-Path "$regDir\vi-smoke.journal")) 'the killed run left its journal'
+    $out = Inst @{}
+    $recT = Get-Content -Raw "$regDir\vi-smoke.json" | ConvertFrom-Json
+    Check ($out -match 'did not finish; putting back') 'the next run says it is putting things back'
+    Check ($recT.version -eq '1.1.0' -and (Get-Item "$installDir\app.exe").Length -eq $where + 1 -and (NoLeftovers)) 'and then installs 1.1.0 cleanly'
+
+    Write-Host "a file in use: refused and rolled back, or closed with INSTALL_CLOSE_APPS"
+    Copy-Item -Force "$env:windir\System32\PING.EXE" "$root\src\app.exe"
+    [IO.File]::WriteAllText("$root\src\tool.jar", "not really a jar v3")
+    SmokeConfig $false
+    Build '1.2.0'
+    $out = Inst @{}
+    Check ((Get-Content -Raw "$regDir\vi-smoke.json" | ConvertFrom-Json).version -eq '1.2.0') '1.2.0 installed'
+    [IO.File]::WriteAllText("$root\src\tool.jar", "not really a jar v4")
+    Build '1.3.0'
+    $held = [IO.File]::Open("$installDir\tool.jar", 'Open', 'Read', 'Read')
+    try { $out = Inst @{} } finally { $held.Dispose() }
+    Check ($out -match 'Could not replace .*tool\.jar' -and $out -match '1\.2\.0 was put back') 'a held jar fails the update, which is rolled back'
+    Check ((Get-Content -Raw "$regDir\vi-smoke.json" | ConvertFrom-Json).version -eq '1.2.0' -and (Get-Content -Raw "$installDir\tool.jar") -eq 'not really a jar v3' -and (NoLeftovers)) 'still 1.2.0, nothing left over'
+    $holder = Start-Process powershell -PassThru -WindowStyle Hidden -ArgumentList '-NoProfile', '-Command', "`$f = [IO.File]::Open('$installDir\tool.jar', 'Open', 'Read', 'Read'); Start-Sleep 120"
+    Start-Sleep -Seconds 2
+    $out = Inst @{ INSTALL_CLOSE_APPS = '1' }
+    Check ($out -match 'Closing powershell\.exe' -and $holder.HasExited) 'INSTALL_CLOSE_APPS closes the process holding it'
+    Check ((Get-Content -Raw "$regDir\vi-smoke.json" | ConvertFrom-Json).version -eq '1.3.0' -and (Get-Content -Raw "$installDir\tool.jar") -eq 'not really a jar v4') 'and 1.3.0 is installed'
+
+    Write-Host "a running .exe is replaced without closing it"
+    $ping = Start-Process "$installDir\app.exe" -PassThru -WindowStyle Hidden -ArgumentList '-n', '120', '127.0.0.1'
+    Start-Sleep -Seconds 1
+    [IO.File]::AppendAllText("$root\src\app.exe", 'x')
+    Build '1.4.0'
+    $out = Inst @{}
+    Check ((Get-Content -Raw "$regDir\vi-smoke.json" | ConvertFrom-Json).version -eq '1.4.0' -and -not $ping.HasExited) '1.4.0 installed while app.exe runs'
+    Check ((Get-Item "$installDir\app.exe").Length -eq (Get-Item "$root\src\app.exe").Length) 'app.exe is the new one'
+    Check (@(Get-ChildItem $installDir -Force -Filter '.vi-backup-*').Count -eq 1) 'the running old one waits in the backup'
+    Stop-Process -Id $ping.Id -Force; Start-Sleep -Milliseconds 500
+    $out = Inst @{}
+    Check ($out -match 'already installed' -and (NoLeftovers)) 'the next run clears the backup'
+    & "$installDir\uninstall.cmd" -Yes 2>&1 | Out-Null
+    Start-Sleep -Seconds 5
+    Check (-not (Test-Path $installDir) -and -not (Test-Path "$regDir\vi-smoke.lock")) 'uninstalled, lock file gone'
+
     # ---- two installs: a runtime, and an app that needs it ---------------------------------
     Write-Host "runtime + dependent app"
     function BuildTo([string]$cfg, [string]$name, [string]$ver) {
