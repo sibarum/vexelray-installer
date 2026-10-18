@@ -4,7 +4,7 @@ Turns a native-image executable and/or a compiled uberjar into a one-line instal
 from a public GitHub repo.
 
 ```
-your build ──► installer:generate ──► install.ps1  uninstall.ps1  update.ps1  diagnose.ps1  manifest.json  README.md
+your build ──► installer:generate ──► install.ps1  uninstall.ps1  update.ps1  diagnose.ps1  manager.ps1  manifest.json  README.md
                                   └─► staged artifacts ──► installer:publish ──► GitHub release
 ```
 
@@ -58,7 +58,7 @@ A complete example is in [tests/maven-sample](tests/maven-sample/pom.xml).
 2. `mvn package installer:publish` also creates the GitHub release `v<version>` and uploads the
    artifacts (token in `$GITHUB_TOKEN`, or the variable named by `-Dinstaller.tokenEnv`). Add
    `-Dinstaller.dryRun` to see what would be uploaded. `publish` is never bound to a phase.
-3. Commit `install.ps1`, `uninstall.ps1`, `update.ps1`, `diagnose.ps1`, `manifest.json` and `README.md` from
+3. Commit `install.ps1`, `uninstall.ps1`, `update.ps1`, `diagnose.ps1`, `manager.ps1`, `manifest.json` and `README.md` from
    `target/installer/` to the project repo (or point `outputDirectory` at a checkout of it).
    The README contains the one-liner:
    ```powershell
@@ -208,7 +208,7 @@ GitHub Pages (**Settings > Pages > Deploy from a branch**).
   registers file types, optionally edits the user PATH, and registers an Apps & features entry.
   Nothing is written to the install dir until every download has verified. Options:
   `INSTALL_VERSION`, `INSTALL_DIR`, `INSTALL_NO_SHORTCUTS`, `INSTALL_NO_PATH`,
-  `INSTALL_NO_ASSOCIATIONS`, `INSTALL_FORCE`, `INSTALL_SKIP_CHECKS`, `INSTALL_QUIET`. The `NO_*` choices in effect are stored in the
+  `INSTALL_NO_ASSOCIATIONS`, `INSTALL_FORCE`, `INSTALL_SKIP_CHECKS`, `INSTALL_QUIET`, `INSTALL_CLOSE_APPS`. The `NO_*` choices in effect are stored in the
   install record (`options`), and updates and reinstalls keep them; `INSTALL_NO_*=0` opts back in.
   Run from a console a person is at, it opens a WinForms window: the folder and the shortcut, PATH and
   file-type choices (filled from the options above and the last install), then a progress bar and the same
@@ -217,6 +217,26 @@ GitHub Pages (**Settings > Pages > Deploy from a branch**).
   time before files are placed. `INSTALL_QUIET=1` (`-Quiet`), `CI`, `-NonInteractive` or redirected output
   keep it in the console; `update.ps1` and suite installs always run their installers quietly (a suite has a
   window of its own; see Suites).
+  Placing files is a transaction. Every file it writes (binaries, launchers, tools, shortcuts, the record)
+  first moves the one it replaces into `.vi-backup-*` in the install folder (or `<registryDir>\..\backup\`
+  for files elsewhere), after a line in `<registryDir>\<id>.journal` says so. The same goes for files the new
+  version drops and for the PATH entries and file types it adds. The record is written last, then a commit
+  line. A failure before the commit plays the journal backwards ("1.2.0 was put back as it was"); a run that
+  was killed is rolled back, or finished if it committed, by the next one. Moving aside is a rename, so a
+  running `.exe` is replaced in place (its old copy is removed by the next run). A file held open, such as a
+  jar a JVM has, is offered to be closed: the window asks, `INSTALL_CLOSE_APPS=1` closes the processes
+  started from the install folder, and otherwise the install fails and is rolled back. `<id>.lock` allows
+  one install of an application at a time. With `INSTALL_EVENTS=1` it also prints `##vi {json}` lines (step,
+  phase, progress) for a program following it.
+- **manager.ps1** (`manager.cmd`) is one window for every install in `registryDir`: installed and available
+  versions, and **Update**, **Change...** (folder, shortcuts, PATH, file types), **Remove** and **Update all**
+  (dependencies first). Each install copies its `manager.ps1` to `<registryDir>\..\manager\` when it is newer
+  (by its `vi-manager-rev` line) and adds a Start menu shortcut, `<publisher> apps` (unless shortcuts are
+  opted out); the last uninstall removes both. The manager changes nothing itself: it runs the
+  application's own `install.ps1` (from its manifest, checked against the SHA-256 there) or `uninstall.ps1` in
+  a quiet child process, one at a time, and follows its events. It asks before closing what is running from
+  an install folder. Cancel stops a job only while it downloads. `-List`, `-Update <id>`, `-UpdateAll` and
+  `-Remove <id>` (with `-CloseApps`) do the same in the console.
 - **diagnose.ps1** (`diagnose.cmd`) checks the computer against `windows.system` and writes a text report
   for bug reports to `<registryDir>\..\diagnostics\<id>-<time>.txt` (the last ten are kept; `-Out`, `-Copy`,
   `-Json`): Windows edition and build, processor, memory, disk, GPU scheduling, power; each display's

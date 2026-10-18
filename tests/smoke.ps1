@@ -268,6 +268,28 @@ try {
     Start-Sleep -Seconds 5
     Check (-not (Test-Path $installDir) -and -not (Test-Path "$regDir\vi-smoke.lock")) 'uninstalled, lock file gone'
 
+    # ---- the app manager -------------------------------------------------------------------
+    Write-Host "the app manager lists, updates and removes"
+    $out = Inst @{ INSTALL_VERSION = '1.0.0' }
+    $mgrLnk = Join-Path ([Environment]::GetFolderPath('Programs')) 'Test apps.lnk'
+    Check ((Test-Path "$root\manager\manager.ps1") -and (Test-Path "$root\manager\manager.cmd")) 'the install sets up the shared manager beside the registry'
+    Check ((Test-Path $mgrLnk) -and (Get-Content -Raw "$root\manager\manager.json" | ConvertFrom-Json).shortcut -eq $mgrLnk) 'with a Start menu shortcut it records'
+    $out = & "$root\manager\manager.cmd" -List 2>&1 | Out-String
+    Write-Host ($out.TrimEnd() -replace '(?m)^', '    | ')
+    Check ($out -match 'vi-smoke\s+1\.0\.0\s+1\.4\.0\s+1\.4\.0 is available') 'manager -List shows the newer version'
+    $out = & "$root\manager\manager.cmd" -Update vi-smoke 2>&1 | Out-String
+    Write-Host ($out.TrimEnd() -replace '(?m)^', '    | ')
+    Check ($out -match 'Updating ViSmoke' -and $out -match 'Updated ViSmoke') 'manager -Update runs the installer and follows it'
+    $recM = Get-Content -Raw "$regDir\vi-smoke.json" | ConvertFrom-Json
+    Check ($recM.version -eq '1.4.0' -and $recM.installDir -eq $installDir -and (NoLeftovers)) 'the record is at 1.4.0, in the same folder'
+    $out = & "$root\manager\manager.cmd" -UpdateAll 2>&1 | Out-String
+    Check ($out -match 'up to date') 'manager -UpdateAll with nothing behind says so'
+    $out = & "$root\manager\manager.cmd" -Remove vi-smoke 2>&1 | Out-String
+    Write-Host ($out.TrimEnd() -replace '(?m)^', '    | ')
+    Start-Sleep -Seconds 5
+    Check ($out -match 'Removed ViSmoke' -and -not (Test-Path $installDir) -and -not (Test-Path "$regDir\vi-smoke.json")) 'manager -Remove uninstalls it'
+    Check (-not (Test-Path "$root\manager") -and -not (Test-Path $mgrLnk)) 'the last uninstall takes the manager and its shortcut'
+
     # ---- two installs: a runtime, and an app that needs it ---------------------------------
     Write-Host "runtime + dependent app"
     function BuildTo([string]$cfg, [string]$name, [string]$ver) {
@@ -405,6 +427,7 @@ try {
     foreach ($k in '.vismoke', '.vismoketaken', '.vismokej', 'vi-smoke.vismoke', 'vi-smoke.vismoketaken', 'vi-smoke.vismokej') {
         Remove-Item -Recurse -Force -LiteralPath "HKCU:\Software\Classes\$k" -ErrorAction SilentlyContinue
     }
+    Remove-Item -Force -LiteralPath (Join-Path ([Environment]::GetFolderPath('Programs')) 'Test apps.lnk') -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
 }
 if ($fails -gt 0) { Write-Host "$fails check(s) failed" -ForegroundColor Red; exit 1 }

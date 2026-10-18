@@ -17,7 +17,7 @@ public final class WindowsTarget implements PlatformTarget {
 
     @Override public PlatformConfig configOf(InstallerConfig config) { return config.windows; }
 
-    @Override public List<String> scriptNames() { return List.of("install.ps1", "uninstall.ps1", "update.ps1", "diagnose.ps1"); }
+    @Override public List<String> scriptNames() { return List.of("install.ps1", "uninstall.ps1", "update.ps1", "diagnose.ps1", "manager.ps1"); }
 
     @Override
     public ObjectNode scriptConfig(InstallerConfig c, PlatformConfig p, String manifestUrl) {
@@ -245,6 +245,7 @@ public final class WindowsTarget implements PlatformTarget {
                 Map.entry("INSTALL_DIR", installDir),
                 Map.entry("PS_INSTALL_DIR", powershellPath(installDir)),
                 Map.entry("REGISTRY_DIR", registryDir(p)),
+                Map.entry("MANAGER_NAME", c.publisherOrName() + " apps"),
                 Map.entry("ID", c.id)));
     }
 }

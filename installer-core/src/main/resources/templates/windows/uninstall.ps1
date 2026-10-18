@@ -212,6 +212,35 @@ function ViInvokeUninstall {
     foreach ($r in $chosen) { ViRemoveOne $r }
 
     $regDir = ViRegistryDir
+    # the last application gone: the app manager beside the registry goes too, with its Start menu shortcut
+    if (@(ViReadRecords).Count -eq 0) {
+        $mdir = Join-Path (Split-Path $regDir -Parent) 'manager'
+        $meta = Join-Path $mdir 'manager.json'
+        if (Test-Path -LiteralPath $meta) {
+            try { $lnk = (Get-Content -Raw -LiteralPath $meta | ConvertFrom-Json).shortcut } catch { $lnk = $null }
+            if ($lnk -and (Test-Path -LiteralPath $lnk)) { Remove-Item -Force -LiteralPath $lnk -ErrorAction SilentlyContinue }
+        }
+        if (Test-Path -LiteralPath $mdir) {
+            # run from manager.cmd, the cmd.exe reading it would fail once it is gone: that waits for it to exit
+            $cmdPid = $null
+            try {
+                $c = [int]$PID
+                for ($n = 0; $n -lt 8 -and $c; $n++) {
+                    $p = Get-CimInstance Win32_Process -Filter "ProcessId=$c" -ErrorAction SilentlyContinue
+                    if (-not $p) { break }
+                    if ($p.Name -eq 'cmd.exe' -and $p.CommandLine -and $p.CommandLine.IndexOf($mdir, [StringComparison]::OrdinalIgnoreCase) -ge 0) { $cmdPid = [int]$p.ProcessId; break }
+                    $c = [int]$p.ParentProcessId
+                }
+            } catch { }
+            if ($cmdPid) {
+                $q = $mdir.Replace("'", "''")
+                Start-Process -FilePath powershell.exe -WindowStyle Hidden -ArgumentList '-NoProfile', '-Command', "Wait-Process -Id $cmdPid -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force -LiteralPath '$q' -ErrorAction SilentlyContinue"
+            } else { Remove-Item -Recurse -Force -LiteralPath $mdir -ErrorAction SilentlyContinue }
+        }
+        foreach ($left in Get-ChildItem -LiteralPath $regDir -Force -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in '.lock', '.home' }) {
+            Remove-Item -Force -LiteralPath $left.FullName -ErrorAction SilentlyContinue
+        }
+    }
     if ((Test-Path -LiteralPath $regDir) -and -not (Get-ChildItem -LiteralPath $regDir -Force)) {
         Remove-Item -Force -LiteralPath $regDir -ErrorAction SilentlyContinue
         $parent = Split-Path $regDir -Parent

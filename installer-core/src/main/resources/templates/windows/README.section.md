@@ -29,6 +29,7 @@ window, set these in the same PowerShell window *before* the install command:
 | `$env:INSTALL_FORCE = '1'` | reinstall even if this version is already installed |
 | `$env:INSTALL_SKIP_CHECKS = '1'` | install even if this computer does not meet the system requirements |
 | `$env:INSTALL_QUIET = '1'` | no window: ask nothing and report in PowerShell only |
+| `$env:INSTALL_CLOSE_APPS = '1'` | close {{NAME}} if it is running and holds a file the update replaces |
 
 Updates and reinstalls remember the `INSTALL_NO_*` choices of the last install. To get shortcuts,
 the PATH entry or file types back, set that variable to `'0'` and run the install command again.
@@ -51,12 +52,18 @@ as `cmd.exe /c path args...`.
 
 ### Update
 
+Open **{{MANAGER_NAME}}** from the Start menu. It lists everything installed this way, with **Update**,
+**Change...** (folder, shortcuts, PATH, file types), **Remove** and **Update all**. Or update from PowerShell:
+
 ```powershell
 & "{{PS_INSTALL_DIR}}\update.cmd"
 ```
 
 Checks GitHub for newer versions of the binaries and installs them after asking. Use
 `-Check` to only look, `-Yes` to skip the question.
+
+An update that fails or is interrupted puts back the version you had, exactly as it was. If the computer
+went off halfway, the next install or update first finishes putting it back.
 
 ### Reporting a problem
 

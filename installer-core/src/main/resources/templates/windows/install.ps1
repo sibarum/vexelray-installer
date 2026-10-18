@@ -31,8 +31,16 @@ function ViUiBar([int]$pct, $ui = $ViUi) {
     if (-not $ui -or $ui.Closed) { return }
     if ($pct -lt 0) { $ui.Bar.Style = 'Marquee' } else { $ui.Bar.Style = 'Continuous'; $ui.Bar.Value = [Math]::Min(100, $pct) }
 }
+# With INSTALL_EVENTS=1 (as the app manager runs it), "##vi {json}" lines say what is happening: e = step
+# (m), phase (p: download, then busy once files are being placed) and progress (label, done, total bytes).
+function ViEvent($e) {
+    if ($env:INSTALL_EVENTS -ne '1') { return }
+    [Console]::Out.WriteLine('##vi ' + ($e | ConvertTo-Json -Compress -Depth 4))
+    [Console]::Out.Flush()
+}
 function ViStep([string]$m) {
     Write-Host "==> $m" -ForegroundColor Cyan
+    ViEvent @{ e = 'step'; m = $m }
     if ($ViUi -and -not $ViUi.Closed) { $ViUi.Status.Text = $m; ViUiBar -1 }
     ViUiLog $m
 }
@@ -467,6 +475,7 @@ function ViUiPage($ui, [string]$page) {
 
 # 'busy' (closing refused), 'download' (closing or Cancel cancels), 'options' or 'done' (closing closes)
 function ViUiPhase([string]$phase) {
+    ViEvent @{ e = 'phase'; p = $phase }
     if (-not $ViUi -or $ViUi.Closed) { return }
     $ViUi.Phase = $phase
     $ViUi.Action = $null
@@ -857,6 +866,50 @@ function ViLock([string]$id) {
     catch { throw "Another install, update or removal of $($InstallerCfg.name) is running. Let it finish, then try again." }
 }
 
+# ---- app manager -----------------------------------------------------------------------
+# The manager.ps1 this install brought is copied beside the registry directory (manager\) when it is newer
+# than the one there, by its "vi-manager-rev" line, with a launcher and a Start menu shortcut (unless
+# shortcuts are opted out). manager\manager.json says where the shortcut is, so the last uninstall can
+# remove it with the folder.
+
+function ViManagerRev([string]$p) {
+    if (-not (Test-Path -LiteralPath $p)) { return -1 }
+    $m = Select-String -LiteralPath $p -Pattern '^# vi-manager-rev: (\d+)' | Select-Object -First 1
+    if ($m) { [int]$m.Matches[0].Groups[1].Value } else { 0 }
+}
+
+function ViInstallManager([string]$installDir, [bool]$noShortcut) {
+    $src = Join-Path $installDir 'manager.ps1'
+    if (-not (Test-Path -LiteralPath $src)) { return }
+    $mdir = Join-Path (Split-Path (ViRegistryDir) -Parent) 'manager'
+    ViEnsureDir $mdir
+    $dst = Join-Path $mdir 'manager.ps1'
+    if ((ViManagerRev $src) -gt (ViManagerRev $dst)) {
+        $t = "$dst.new"
+        Copy-Item -Force -LiteralPath $src -Destination $t
+        Move-Item -Force -LiteralPath $t -Destination $dst
+    }
+    ViWriteText (Join-Path $mdir 'manager.cmd') "@echo off`r`npowershell.exe -NoProfile -ExecutionPolicy Bypass -File `"%~dp0manager.ps1`" %*`r`nexit /b %errorlevel%`r`n"
+    $metaPath = Join-Path $mdir 'manager.json'
+    $meta = $null
+    if (Test-Path -LiteralPath $metaPath) { try { $meta = Get-Content -Raw -LiteralPath $metaPath | ConvertFrom-Json } catch { } }
+    $lnk = if ($meta -and $meta.shortcut) { [string]$meta.shortcut } else { $null }
+    if (-not $noShortcut -and -not ($lnk -and (Test-Path -LiteralPath $lnk))) {
+        $label = if ($InstallerCfg.publisher) { "$($InstallerCfg.publisher) apps" } else { 'Installed apps' }
+        $lnk = Join-Path ([Environment]::GetFolderPath('Programs')) "$label.lnk"
+        $ps = Join-Path $env:windir 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
+        $s.TargetPath = $ps
+        $s.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$dst`""
+        $s.WorkingDirectory = $mdir
+        $s.Description = 'Update, change or remove the applications installed with it'
+        $s.WindowStyle = 7
+        $s.Save()
+        ViInfo "Shortcut: $lnk"
+    }
+    ViWriteText $metaPath (([ordered]@{ rev = (ViManagerRev $dst); shortcut = $lnk }) | ConvertTo-Json)
+}
+
 # ---- install ---------------------------------------------------------------------------
 
 function ViOptOut([bool]$switch, [string]$envValue, $stored) {
@@ -922,8 +975,8 @@ function ViInvokeInstall {
         $installDir = $pick.Dir
         $skipShortcuts = $pick.NoShortcuts; $skipPath = $pick.NoPath; $skipAssoc = $pick.NoAssociations
         $Force = $true
-        ViUiPhase 'download'
     }
+    ViUiPhase 'download'
     $ViState.Version = $entry.version
     $ViState.Dir = $installDir
 
@@ -950,7 +1003,7 @@ function ViInvokeInstall {
         # 1. download + verify everything before touching the install directory; the tools come first, as
         # diagnose.ps1 checks the system requirements before anything large is downloaded
         $tools = @()
-        foreach ($tn in 'uninstall.ps1', 'update.ps1', 'diagnose.ps1') {
+        foreach ($tn in 'uninstall.ps1', 'update.ps1', 'diagnose.ps1', 'manager.ps1') {
             $t = $manifest.tools.$tn
             if (-not $t) { continue }
             $dl = Join-Path $tmp $tn
@@ -1294,6 +1347,8 @@ function ViInvokeInstall {
         New-ItemProperty -Path $uninstallKey -Name NoModify -Value 1 -PropertyType DWord -Force | Out-Null
         New-ItemProperty -Path $uninstallKey -Name NoRepair -Value 1 -PropertyType DWord -Force | Out-Null
         New-ItemProperty -Path $uninstallKey -Name EstimatedSize -Value $sizeKb -PropertyType DWord -Force | Out-Null
+
+        try { ViInstallManager $installDir $skipShortcuts } catch { ViWarn "The app manager was not set up: $($_.Exception.Message)" }
 
         ViSay ""
         ViSay "$appName $($entry.version) installed." Green
