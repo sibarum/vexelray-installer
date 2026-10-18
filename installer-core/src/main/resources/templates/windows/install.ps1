@@ -321,7 +321,7 @@ function ViShortcut([string]$lnk, [string]$target, [string]$arguments, [string]$
 
 # ---- window ----------------------------------------------------------------------------
 # Everything runs on this one thread: the window's event handlers only set $ViUi.Action, the install code
-# reads it, and Application.DoEvents (from ViUiLog, ViDownload and ViUiWait) keeps the window responsive.
+# reads it, and Application.DoEvents (from ViUiLog, ViFetchAll and ViUiWait) keeps the window responsive.
 # The handlers are closures, so they touch $ui and .NET objects only, never the Vi* functions.
 
 function ViWantsWindow([bool]$quiet) {
@@ -618,42 +618,222 @@ function ViUiFinish([bool]$ok, [string]$err) {
     }
 }
 
-# Invoke-WebRequest -OutFile, or with a window a chunked download that shows its progress, keeps the
-# window responsive and stops when Cancel is pressed. Without a window of its own, the window is the one a
-# suite installer running this one quietly leaves in $ViHostUi, if any (with the same Status, Bar and Action).
-function ViDownload([string]$url, [string]$out, [string]$label) {
+# ---- downloads -------------------------------------------------------------------------
+# ViFetchAll downloads a batch of files, up to four at a time, on this one thread: HttpClient's tasks are
+# polled, never awaited, so the window (and a suite's window) stays live and nothing runs a script block on
+# another thread. Each file goes to <registryDir>\..\cache\<sha256>.part and becomes <sha256> once its hash
+# matches, so a run that was stopped resumes where it left off (with a Range request) and a file already
+# downloaded is not fetched again. A dropped or stalled connection is retried, from where it got to, three
+# times. Returns the cache path of each file, in order; the caller moves or deletes them.
+
+function ViSize([long]$n) { if ($n -ge 1MB) { '{0:N1} MB' -f ($n / 1MB) } else { '{0:N0} KB' -f [Math]::Max(1, [Math]::Ceiling($n / 1KB)) } }
+
+function ViCacheDir { Join-Path (Split-Path (ViRegistryDir) -Parent) 'cache' }
+
+function ViHttpClient {
+    if ($script:ViHttp) { return $script:ViHttp }
+    Add-Type -AssemblyName System.Net.Http
+    [Net.ServicePointManager]::DefaultConnectionLimit = [Math]::Max([Net.ServicePointManager]::DefaultConnectionLimit, 8)
+    try { if ([Net.WebRequest]::DefaultWebProxy) { [Net.WebRequest]::DefaultWebProxy.Credentials = [Net.CredentialCache]::DefaultCredentials } } catch { }
+    $h = New-Object Net.Http.HttpClientHandler
+    $h.AllowAutoRedirect = $true
+    $c = New-Object Net.Http.HttpClient($h)
+    $c.Timeout = [Threading.Timeout]::InfiniteTimeSpan
+    $c.DefaultRequestHeaders.UserAgent.ParseAdd('vexelray-installer')
+    $script:ViHttp = $c
+    $c
+}
+
+function ViTaskError($t) {
+    if ($t.Exception) { return $t.Exception.GetBaseException().Message }
+    'cancelled'
+}
+
+# $items: objects with Url, Label, Sha (lowercase hex) and Size (bytes, 0 when unknown).
+function ViFetchAll($items) {
+    $items = @($items)
+    if ($items.Count -eq 0) { return @() }
     $ui = $ViUi
     if (-not $ui -and $ViHostUi -and -not $ViHostUi.Closed) { $ui = $ViHostUi }
-    if (-not $ui -or $ui.Closed) { Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $out; return }
-    $ui.Status.Text = "Downloading $label"
-    [Windows.Forms.Application]::DoEvents()
-    $req = [Net.WebRequest]::Create($url)
-    $req.UserAgent = 'vexelray-installer'
-    $resp = $req.GetResponse()
+    if ($ui -and $ui.Closed) { $ui = $null }
+    $cache = ViCacheDir
+    ViEnsureDir $cache
+    $client = ViHttpClient
+    # one download per hash; an item that repeats one gets a copy of it
+    $jobs = @()
+    $bySha = @{}
+    $of = @()
+    foreach ($it in $items) {
+        if ($bySha.ContainsKey($it.Sha)) { $of += $bySha[$it.Sha]; continue }
+        $bySha[$it.Sha] = $jobs.Count
+        $of += $jobs.Count
+        $jobs += [pscustomobject]@{
+            Item = $it; Final = Join-Path $cache $it.Sha; Part = Join-Path $cache "$($it.Sha).part"
+            State = 'wait'; Task = $null; Resp = $null; Stream = $null; File = $null
+            Done = 0L; Total = [long]$it.Size; Tries = 0; Fresh = $false; Last = [DateTime]::Now; Sampled = [DateTime]::Now; Error = $null
+        }
+    }
+    $total = [long](($jobs | ForEach-Object { $_.Total } | Measure-Object -Sum).Sum)
+    foreach ($j in $jobs) {
+        if ((Test-Path -LiteralPath $j.Final) -and (ViSha $j.Final) -eq $j.Item.Sha) { $j.State = 'done'; $j.Done = $j.Total; ViInfo "$($j.Item.Label) (already downloaded)" }
+        elseif (Test-Path -LiteralPath $j.Final) { Remove-Item -Force -LiteralPath $j.Final }
+    }
+    $shownPct = -1; $lastEvent = [DateTime]::MinValue
     try {
-        $total = $resp.ContentLength
-        $in = $resp.GetResponseStream()
-        $fs = [IO.File]::Create($out)
-        try {
-            $buf = New-Object byte[] 262144
-            $done = 0L; $shown = -1
-            ViUiBar $(if ($total -gt 0) { 0 } else { -1 }) $ui
-            while (($n = $in.Read($buf, 0, $buf.Length)) -gt 0) {
-                $fs.Write($buf, 0, $n)
-                $done += $n
-                if ($total -gt 0) {
-                    $pct = [int](100 * $done / $total)
-                    if ($pct -ne $shown) {
-                        $shown = $pct
-                        ViUiBar $pct $ui
+        while (@($jobs | Where-Object { $_.State -ne 'done' }).Count -gt 0) {
+            $busy = @($jobs | Where-Object { $_.State -in 'send', 'open', 'read' }).Count
+            foreach ($j in @($jobs | Where-Object { $_.State -eq 'wait' -and (-not $_.RetryAt -or [DateTime]::Now -ge $_.RetryAt) })) {
+                if ($busy -ge 4) { break }
+                ViFetchStart $j $client
+                $busy++
+            }
+            $moved = $false
+            foreach ($j in $jobs) { if (ViFetchStep $j) { $moved = $true } }
+            # progress, at most ten times a second
+            $done = [long](($jobs | ForEach-Object { $_.Done } | Measure-Object -Sum).Sum)
+            if (([DateTime]::Now - $lastEvent).TotalMilliseconds -ge 100) {
+                $lastEvent = [DateTime]::Now
+                $active = @($jobs | Where-Object { $_.State -in 'send', 'open', 'read' })
+                $label = if ($active.Count -eq 1) { $active[0].Item.Label } else { "$($active.Count) files" }
+                ViEvent @{ e = 'progress'; label = $label; done = $done; total = $total }
+                if ($ui -and -not $ui.Closed) {
+                    if ($total -gt 0) {
+                        $pct = [int](100 * $done / $total)
+                        if ($pct -ne $shownPct) { $shownPct = $pct; ViUiBar $pct $ui }
                         $ui.Status.Text = "Downloading {0} ({1:N1} of {2:N1} MB)" -f $label, ($done / 1MB), ($total / 1MB)
                     }
                 }
+            }
+            if ($ui -and -not $ui.Closed) {
                 [Windows.Forms.Application]::DoEvents()
                 if ($ui.Action -eq 'secondary') { $ViState.Cancelled = $true; throw 'Cancelled. Nothing was installed.' }
             }
-        } finally { $fs.Dispose(); $in.Dispose() }
-    } finally { $resp.Close() }
+            # nothing finished: block until one of the tasks does (or briefly, to keep a window drawn)
+            if (-not $moved) {
+                $tasks = @($jobs | Where-Object { $_.Task -and $_.State -in 'send', 'open', 'read' } | ForEach-Object { $_.Task })
+                if ($tasks.Count -gt 0) { [void][Threading.Tasks.Task]::WaitAny([Threading.Tasks.Task[]]$tasks, $(if ($ui) { 15 } else { 250 })) }
+                else { Start-Sleep -Milliseconds 15 }
+            }
+        }
+    } finally {
+        foreach ($j in $jobs) { ViFetchClose $j }
+    }
+    ViEvent @{ e = 'progress'; label = 'done'; done = $total; total = $total }
+    $out = @()
+    $first = @{}
+    for ($i = 0; $i -lt $items.Count; $i++) {
+        $f = $jobs[$of[$i]].Final
+        if ($first.ContainsKey($f)) { $c = "$f.$i"; Copy-Item -Force -LiteralPath $f -Destination $c; $out += $c }
+        else { $first[$f] = $true; $out += $f }
+    }
+    $script:ViCached += $out
+    $out
+}
+
+# After a commit, the cached files this install did not move into place; and, before it, whatever an
+# earlier install left in the cache more than two weeks ago.
+function ViCacheDone {
+    foreach ($f in @($script:ViCached)) { if ($f -and (Test-Path -LiteralPath $f)) { Remove-Item -Force -LiteralPath $f -ErrorAction SilentlyContinue } }
+    $script:ViCached = @()
+}
+function ViCacheSweep {
+    $cache = ViCacheDir
+    if (-not (Test-Path -LiteralPath $cache)) { return }
+    $old = (Get-Date).AddDays(-14)
+    Get-ChildItem -LiteralPath $cache -File -Force | Where-Object { $_.LastWriteTime -lt $old } | Remove-Item -Force -ErrorAction SilentlyContinue
+}
+
+function ViFetchClose($j) {
+    foreach ($d in @($j.Stream, $j.Resp, $j.File)) { if ($d) { try { $d.Dispose() } catch { } } }
+    $j.Stream = $null; $j.Resp = $null; $j.File = $null
+}
+
+function ViFetchStart($j, $client) {
+    $j.Tries++
+    $have = 0L
+    if (-not $j.Fresh -and (Test-Path -LiteralPath $j.Part)) { $have = (Get-Item -LiteralPath $j.Part).Length }
+    else { Remove-Item -Force -LiteralPath $j.Part -ErrorAction SilentlyContinue }
+    # .NET Framework allows two connections per host, fixed when the host is first used (the manifest fetch)
+    try { [Net.ServicePointManager]::FindServicePoint([uri]$j.Item.Url).ConnectionLimit = 8 } catch { }
+    $req = New-Object Net.Http.HttpRequestMessage([Net.Http.HttpMethod]::Get, $j.Item.Url)
+    if ($have -gt 0) { $req.Headers.Range = New-Object Net.Http.Headers.RangeHeaderValue($have, $null) }
+    $j.Done = $have
+    $j | Add-Member -NotePropertyName Have -NotePropertyValue $have -Force
+    $j.Task = $client.SendAsync($req, [Net.Http.HttpCompletionOption]::ResponseHeadersRead)
+    $j.State = 'send'
+    $j.Last = [DateTime]::Now
+    if ($j.Tries -eq 1) {
+        $what = if ($j.Total -gt 0) { "$($j.Item.Label) ($(ViSize $j.Total))" } else { $j.Item.Label }
+        if ($have -gt 0) { $what += ", resuming at $(ViSize $have)" }
+        ViInfo $what
+    }
+}
+
+# Moves one download along when its task is done. Returns $true when something happened.
+function ViFetchStep($j) {
+    if ($j.State -notin 'send', 'open', 'read') { return $false }
+    if (-not $j.Task.IsCompleted) {
+        # the file's length is read four times a second: asking it while the copy writes slows the copy down
+        if ($j.State -eq 'read' -and ([DateTime]::Now - $j.Sampled).TotalMilliseconds -ge 250) {
+            $j.Sampled = [DateTime]::Now
+            $pos = $j.Done
+            try { $pos = $j.File.Position } catch { }
+            if ($pos -ne $j.Done) { $j.Done = $pos; $j.Last = [DateTime]::Now }
+        }
+        if (([DateTime]::Now - $j.Last).TotalSeconds -gt 60) { ViFetchRetry $j 'no data for a minute' }
+        return $false
+    }
+    $t = $j.Task
+    if ($t.Status -ne 'RanToCompletion') { ViFetchRetry $j (ViTaskError $t); return $true }
+    $j.Last = [DateTime]::Now
+    switch ($j.State) {
+        'send' {
+            $r = $t.Result
+            $j.Resp = $r
+            $code = [int]$r.StatusCode
+            if ($code -eq 416) { $j.Fresh = $true; ViFetchClose $j; $j.State = 'wait'; return $true }
+            if (-not $r.IsSuccessStatusCode) {
+                ViFetchClose $j
+                throw "Could not download $($j.Item.Label) from $($j.Item.Url): $code $($r.ReasonPhrase). Nothing was installed."
+            }
+            $append = $code -eq 206 -and $j.Have -gt 0
+            if (-not $append) { $j.Done = 0L }
+            $len = $r.Content.Headers.ContentLength
+            if ($j.Total -le 0 -and $len) { $j.Total = [long]$len + $j.Done }
+            $mode = if ($append) { [IO.FileMode]::Append } else { [IO.FileMode]::Create }
+            $j.File = New-Object IO.FileStream($j.Part, $mode, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+            $j.Task = $r.Content.ReadAsStreamAsync()
+            $j.State = 'open'
+        }
+        'open' {
+            # the copy runs inside .NET; this loop only watches the file grow
+            $j.Stream = $t.Result
+            $j.Task = $j.Stream.CopyToAsync($j.File, 1048576)
+            $j.State = 'read'
+        }
+        'read' {
+            try { $j.File.Flush(); $j.Done = $j.File.Position } catch { }
+            ViFetchClose $j
+            if ($j.Total -gt 0 -and $j.Done -lt $j.Total) { ViFetchRetry $j "the connection closed at $($j.Done) of $($j.Total) bytes"; return $true }
+            if ((ViSha $j.Part) -ne $j.Item.Sha) {
+                # a resumed file may hold bytes of something else that was there; once more from the start
+                if ($j.Have -gt 0 -and -not $j.Fresh) { $j.Fresh = $true; $j.State = 'wait'; $j.Tries = 1; return $true }
+                Remove-Item -Force -LiteralPath $j.Part -ErrorAction SilentlyContinue
+                throw "Checksum mismatch for $($j.Item.Label) downloaded from $($j.Item.Url). Nothing was installed."
+            }
+            Move-Item -Force -LiteralPath $j.Part -Destination $j.Final
+            $j.State = 'done'
+        }
+    }
+    $true
+}
+
+function ViFetchRetry($j, [string]$why) {
+    ViFetchClose $j
+    if ($j.Tries -ge 4) { throw "Could not download $($j.Item.Label) from $($j.Item.Url): $why. Run the install again to carry on from where it stopped." }
+    ViWarn "$($j.Item.Label): $why; trying again"
+    $j.State = 'wait'
+    $j | Add-Member -NotePropertyName RetryAt -NotePropertyValue ([DateTime]::Now.AddSeconds([Math]::Pow(2, $j.Tries))) -Force
 }
 
 # ---- transaction -----------------------------------------------------------------------
@@ -954,6 +1134,8 @@ function ViInvokeInstall {
     $recPath = Join-Path $regDir "$id.json"
     $ViState.Lock = ViLock $id
     ViTxRecover (Join-Path $regDir "$id.journal")
+    $script:ViCached = @()
+    ViCacheSweep
     $old = $null
     if (Test-Path -LiteralPath $recPath) {
         try { $old = Get-Content -Raw -LiteralPath $recPath | ConvertFrom-Json } catch { }
@@ -1003,14 +1185,16 @@ function ViInvokeInstall {
         # 1. download + verify everything before touching the install directory; the tools come first, as
         # diagnose.ps1 checks the system requirements before anything large is downloaded
         $tools = @()
+        $want = @()
         foreach ($tn in 'uninstall.ps1', 'update.ps1', 'diagnose.ps1', 'manager.ps1') {
             $t = $manifest.tools.$tn
             if (-not $t) { continue }
-            $dl = Join-Path $tmp $tn
-            ViDownload $t.url $dl $tn
-            if ((ViSha $dl) -ne $t.sha256) { throw "Checksum mismatch for $tn downloaded from $($t.url). Nothing was installed." }
-            $tools += [pscustomobject]@{ Name = $tn; Temp = $dl; Sha = $t.sha256 }
-            if ($tn -eq 'diagnose.ps1') { $ViState.DiagText = [IO.File]::ReadAllText($dl) }
+            $want += [pscustomobject]@{ Name = $tn; Url = $t.url; Label = $tn; Sha = ([string]$t.sha256).ToLowerInvariant(); Size = 0 }
+        }
+        $got = @(ViFetchAll $want)
+        for ($i = 0; $i -lt $want.Count; $i++) {
+            $tools += [pscustomobject]@{ Name = $want[$i].Name; Temp = $got[$i]; Sha = $want[$i].Sha }
+            if ($want[$i].Name -eq 'diagnose.ps1') { $ViState.DiagText = [IO.File]::ReadAllText($got[$i]) }
         }
         if ($ViState.DiagText -and $plat.requires.system) {
             ViStep "Checking system requirements"
@@ -1036,70 +1220,67 @@ function ViInvokeInstall {
         }
 
         ViStep "Downloading $appName $($entry.version)"
+        # what each binary needs: its icons and itself, unless what is installed already has that hash
         $staged = @()
+        $want = @()
         foreach ($b in $bins) {
-            $ic = $null
+            $s = [pscustomobject]@{ Bin = $b; Target = $null; Temp = $null; Extracted = $null; Icon = $null; FileIcons = @(); Need = -1 }
             if ($b.icon) {
                 $itarget = ViExpand $b.icon.installPath.Replace('{installDir}', $installDir)
-                $itemp = $null
+                $ic = [pscustomobject]@{ Target = $itarget; Temp = $null; Meta = $b.icon; Need = -1 }
                 if (-not ((Test-Path -LiteralPath $itarget) -and ((ViSha $itarget) -eq $b.icon.sha256))) {
-                    ViInfo "$($b.icon.file)"
-                    $itemp = Join-Path $tmp $b.icon.file
-                    ViDownload $b.icon.url $itemp $b.icon.file
-                    if ((ViSha $itemp) -ne $b.icon.sha256) { throw "Checksum mismatch for $($b.icon.file) downloaded from $($b.icon.url). Nothing was installed." }
+                    $ic.Need = $want.Count
+                    $want += [pscustomobject]@{ Url = $b.icon.url; Label = $b.icon.file; Sha = ([string]$b.icon.sha256).ToLowerInvariant(); Size = 0 }
                 }
-                $ic = [pscustomobject]@{ Target = $itarget; Temp = $itemp; Meta = $b.icon }
+                $s.Icon = $ic
             }
-            $fic = @()
             foreach ($fi in @($b.fileIcons | Where-Object { $_ })) {
                 $ftarget = ViExpand $fi.installPath.Replace('{installDir}', $installDir)
-                $ftemp = $null
+                $fc = [pscustomobject]@{ Target = $ftarget; Temp = $null; Meta = $fi; Need = -1 }
                 if (-not ((Test-Path -LiteralPath $ftarget) -and ((ViSha $ftarget) -eq $fi.sha256))) {
-                    ViInfo "$($fi.file)"
-                    $ftemp = Join-Path $tmp $fi.file
-                    ViDownload $fi.url $ftemp $fi.file
-                    if ((ViSha $ftemp) -ne $fi.sha256) { throw "Checksum mismatch for $($fi.file) downloaded from $($fi.url). Nothing was installed." }
+                    $fc.Need = $want.Count
+                    $want += [pscustomobject]@{ Url = $fi.url; Label = $fi.file; Sha = ([string]$fi.sha256).ToLowerInvariant(); Size = 0 }
                 }
-                $fic += [pscustomobject]@{ Target = $ftarget; Temp = $ftemp; Meta = $fi }
+                $s.FileIcons += $fc
             }
             if ($b.kind -eq 'archive') {
-                $adir = ViExpand $b.installPath.Replace('{installDir}', $installDir)
+                $s.Target = ViExpand $b.installPath.Replace('{installDir}', $installDir)
+                $s.Icon = $null; $s.FileIcons = @()
                 $prev = $null
-                if ($old) { $prev = @($old.archives) | Where-Object { $_.name -eq $b.name -and $_.sha256 -eq $b.sha256 -and $_.dir -eq $adir } | Select-Object -First 1 }
+                if ($old) { $prev = @($old.archives) | Where-Object { $_.name -eq $b.name -and $_.sha256 -eq $b.sha256 -and $_.dir -eq $s.Target } | Select-Object -First 1 }
                 $intact = [bool]$prev
                 if ($intact) {
                     foreach ($f in @($old.files)) {
                         if ($f.kind -eq 'archive-file' -and $f.name -eq $b.name -and -not (Test-Path -LiteralPath $f.path)) { $intact = $false; break }
                     }
                 }
-                if ($intact) {
-                    ViInfo "$($b.file) is already current"
-                    $staged += [pscustomobject]@{ Bin = $b; Target = $adir; Temp = $null; Extracted = $null; Icon = $null }
-                    continue
-                }
-                ViInfo ("{0} ({1:N1} MB)" -f $b.file, ($b.size / 1MB))
-                $dl = Join-Path $tmp $b.file
-                ViDownload $b.url $dl $b.file
-                if ((ViSha $dl) -ne $b.sha256) { throw "Checksum mismatch for $($b.file) downloaded from $($b.url). Nothing was installed." }
-                ViInfo "Unpacking $($b.file)"
-                $xdir = Join-Path $tmp ("x-" + $b.name)
+                if ($intact) { ViInfo "$($b.file) is already current" }
+            } else {
+                $s.Target = ViExpand $b.installPath.Replace('{installDir}', $installDir)
+                $intact = (Test-Path -LiteralPath $s.Target) -and ((ViSha $s.Target) -eq $b.sha256)
+                if ($intact) { ViInfo "$($b.file) is already current" }
+            }
+            if (-not $intact) {
+                $s.Need = $want.Count
+                $want += [pscustomobject]@{ Url = $b.url; Label = $b.file; Sha = ([string]$b.sha256).ToLowerInvariant(); Size = [long]$b.size }
+            }
+            $staged += $s
+        }
+        $got = @(ViFetchAll $want)
+        foreach ($s in $staged) {
+            if ($s.Icon -and $s.Icon.Need -ge 0) { $s.Icon.Temp = $got[$s.Icon.Need] }
+            foreach ($fc in $s.FileIcons) { if ($fc.Need -ge 0) { $fc.Temp = $got[$fc.Need] } }
+            if ($s.Need -lt 0) { continue }
+            $dl = $got[$s.Need]
+            if ($s.Bin.kind -eq 'archive') {
+                ViInfo "Unpacking $($s.Bin.file)"
+                $xdir = Join-Path $tmp ("x-" + $s.Bin.name)
                 ViExpandZip $dl $xdir
-                Remove-Item -Force -LiteralPath $dl
-                $staged += [pscustomobject]@{ Bin = $b; Target = $adir; Temp = $null; Extracted = $xdir; Icon = $null }
-                continue
+                $s.Extracted = $xdir
+            } else {
+                ViCheckSignature $dl $s.Bin.signature $s.Bin.file
+                $s.Temp = $dl
             }
-            $target = ViExpand $b.installPath.Replace('{installDir}', $installDir)
-            if ((Test-Path -LiteralPath $target) -and ((ViSha $target) -eq $b.sha256)) {
-                ViInfo "$($b.file) is already current"
-                $staged += [pscustomobject]@{ Bin = $b; Target = $target; Temp = $null; Icon = $ic; FileIcons = $fic }
-                continue
-            }
-            ViInfo ("{0} ({1:N1} MB)" -f $b.file, ($b.size / 1MB))
-            $dl = Join-Path $tmp $b.file
-            ViDownload $b.url $dl $b.file
-            if ((ViSha $dl) -ne $b.sha256) { throw "Checksum mismatch for $($b.file) downloaded from $($b.url). Nothing was installed." }
-            ViCheckSignature $dl $b.signature $b.file
-            $staged += [pscustomobject]@{ Bin = $b; Target = $target; Temp = $dl; Icon = $ic; FileIcons = $fic }
         }
         # 2. place files; from here on the install is not cancelled halfway, and everything it changes goes
         # through the journal (see ViTxBegin) until the commit, so a failure puts the last install back
@@ -1298,6 +1479,7 @@ function ViInvokeInstall {
         ViTxPutText $tx (Join-Path $installDir 'install-manifest.json') $json
         ViTxPutText $tx $recPath $json
         ViTxCommit $tx
+        ViCacheDone
         } catch {
             $err = $_.Exception.Message
             $back = ViTxRollback $tx.Journal

@@ -290,6 +290,44 @@ try {
     Check ($out -match 'Removed ViSmoke' -and -not (Test-Path $installDir) -and -not (Test-Path "$regDir\vi-smoke.json")) 'manager -Remove uninstalls it'
     Check (-not (Test-Path "$root\manager") -and -not (Test-Path $mgrLnk)) 'the last uninstall takes the manager and its shortcut'
 
+    # ---- downloads resume, retry and are cached by hash ------------------------------------
+    Write-Host "downloads: resumed, retried, reused, then cleared from the cache"
+    $mf = Get-Content -Raw "$root\site\manifest.json" | ConvertFrom-Json
+    $appBin = @(@($mf.versions | Where-Object { $_.version -eq $mf.latest })[0].platforms.windows.binaries | Where-Object { $_.name -eq 'app' })[0]
+    $appRel = ([uri]$appBin.url).AbsolutePath.TrimStart('/')
+    $appBytes = [IO.File]::ReadAllBytes((Join-Path $root $appRel.Replace('/', '\')))
+    $cache = "$root\cache"
+    function Requests { if (Test-Path "$root\_requests.log") { @(Get-Content "$root\_requests.log" | Where-Object { $_ -like "$appRel*" }) } else { @() } }
+    function Reset { Remove-Item -Force "$root\_requests.log" -ErrorAction SilentlyContinue; & "$installDir\uninstall.cmd" -Yes 2>&1 | Out-Null; Start-Sleep -Seconds 4 }
+    # the failed installs above kept their downloads here on purpose (a next run would resume them)
+    Remove-Item -Recurse -Force $cache -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $cache | Out-Null
+    Remove-Item -Force "$root\_requests.log" -ErrorAction SilentlyContinue
+    $half = [int]($appBytes.Length / 2)
+    $part = New-Object byte[] $half; [Array]::Copy($appBytes, $part, $half)
+    [IO.File]::WriteAllBytes("$cache\$($appBin.sha256).part", $part)
+    $out = Inst @{}
+    Check ($out -match 'resuming at' -and @(Requests | Where-Object { $_ -match "bytes=$half-" }).Count -eq 1) 'a partial download resumes with a Range request'
+    Check ((Get-FileHash "$installDir\app.exe").Hash.ToLowerInvariant() -eq $appBin.sha256) 'and the resumed file is whole'
+    Check (@(Get-ChildItem $cache -Force -ErrorAction SilentlyContinue).Count -eq 0) 'the cache is empty after the commit'
+    Reset
+    $third = [int]($appBytes.Length / 3)
+    Set-Content -Encoding ASCII "$root\_drop" "$appRel $third"
+    $out = Inst @{}
+    # the retry resumes from what reached the file; with a file this small that can be nothing yet
+    $resumedAt = @(Requests | Where-Object { $_ -match 'bytes=(\d+)-' } | ForEach-Object { [int]($_ -replace '^.*bytes=(\d+)-.*$', '$1') })
+    Check ($out -match 'trying again' -and @(Requests).Count -eq 2 -and @($resumedAt | Where-Object { $_ -gt $third }).Count -eq 0) 'a dropped connection is retried, from no further than where it stopped'
+    Check ((Get-FileHash "$installDir\app.exe").Hash.ToLowerInvariant() -eq $appBin.sha256) 'and the file is whole'
+    Reset
+    [IO.File]::WriteAllBytes("$cache\$($appBin.sha256).part", (New-Object byte[] 1000))
+    $out = Inst @{}
+    Check ((Get-FileHash "$installDir\app.exe").Hash.ToLowerInvariant() -eq $appBin.sha256 -and @(Requests).Count -eq 2) 'a part that does not match is downloaded again from the start'
+    Reset
+    [IO.File]::WriteAllBytes("$cache\$($appBin.sha256)", $appBytes)
+    $out = Inst @{}
+    Check ($out -match 'already downloaded' -and @(Requests).Count -eq 0) 'a file already in the cache is not downloaded again'
+    Reset
+
     # ---- two installs: a runtime, and an app that needs it ---------------------------------
     Write-Host "runtime + dependent app"
     function BuildTo([string]$cfg, [string]$name, [string]$ver) {

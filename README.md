@@ -228,6 +228,11 @@ GitHub Pages (**Settings > Pages > Deploy from a branch**).
   started from the install folder, and otherwise the install fails and is rolled back. `<id>.lock` allows
   one install of an application at a time. With `INSTALL_EVENTS=1` it also prints `##vi {json}` lines (step,
   phase, progress) for a program following it.
+  Downloads run up to four at a time into `<registryDir>\..\cache\<sha256>.part`, which becomes
+  `<sha256>` once the hash matches. A dropped or stalled connection is retried three times from where it
+  stopped (a `Range` request), and an install that was stopped carries on from there the next time; a file
+  already in the cache is not downloaded again. What an install did not use is removed after its commit,
+  and anything older than two weeks before the next one.
 - **manager.ps1** (`manager.cmd`) is one window for every install in `registryDir`: installed and available
   versions, and **Update**, **Change...** (folder, shortcuts, PATH, file types), **Remove** and **Update all**
   (dependencies first). Each install copies its `manager.ps1` to `<registryDir>\..\manager\` when it is newer
