@@ -211,6 +211,12 @@
           <div class="cmd plain"><code id="only">$env:INSTALL_ONLY = '{{EXAMPLE_IDS}}'</code><button class="copy" type="button" data-copy="only">Copy</button></div>
           <p>The ids are {{ID_LIST}}.</p>{{OPTIONAL}}
         </details>
+        <details id="everything">
+          <summary>Install everything, without being asked</summary>
+          <p>Run the script as a script block, which takes arguments, as the install line cannot:</p>
+          <div class="cmd plain"><code id="everything-cmd">&amp; ([scriptblock]::Create((irm {{INSTALL_URL}}))) --install-everything --do-not-prompt-me</code><button class="copy" type="button" data-copy="everything-cmd">Copy</button></div>
+          <p><code>--install-everything</code> installs every application, the optional ones too (<code>$env:INSTALL_EVERYTHING = '1'</code> does the same), and <code>--do-not-prompt-me</code> opens no window and asks nothing (as <code>$env:INSTALL_QUIET = '1'</code>). Either one works alone.</p>
+        </details>
         <details id="update">
           <summary>Update</summary>
           <p>Run the install line again. Each application is updated to its latest version, and one that is already current is left alone. To reinstall anyway, set <code>$env:INSTALL_FORCE = '1'</code> first.</p>

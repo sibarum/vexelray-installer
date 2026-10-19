@@ -152,6 +152,9 @@ page then lists each member's version. `optional: true` leaves a member out unle
 application not ready yet: its box starts unticked, and a run without the window skips it, unless it is installed
 already (then it is kept up to date like the rest) or `INSTALL_ONLY` names it. The install page names the optional
 members, and the landing page tags their cards. A pinned member is never optional, so a preflight installs everything.
+`--install-everything` (or `INSTALL_EVERYTHING=1`) treats the optional members like the rest, and `--do-not-prompt-me`
+is `-Quiet`. Arguments need the script run from a file or as a script block, since `irm | iex` passes none:
+`& ([scriptblock]::Create((irm <url>))) --install-everything --do-not-prompt-me`. Both pages show that line.
 
 ### A landing page
 

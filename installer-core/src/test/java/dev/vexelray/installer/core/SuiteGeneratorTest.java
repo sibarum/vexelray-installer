@@ -71,6 +71,8 @@ class SuiteGeneratorTest {
         assertTrue(readme.contains("| [Editor](../apps/editor.html) | Edits text. | `editor` | `%LOCALAPPDATA%\\Programs\\Editor` |"));
         assertTrue(readme.contains("| Explorer | Explorer. | `explorer` | `%LOCALAPPDATA%\\Apps\\Explorer` |"));
         assertTrue(readme.contains("$env:INSTALL_ONLY = 'editor,explorer'"));
+        assertTrue(readme.contains("& ([scriptblock]::Create((irm https://raw.githubusercontent.com/owner/framework/main/docs/install/install.ps1)))"
+                + " --install-everything --do-not-prompt-me"));
     }
 
     @Test
@@ -137,14 +139,14 @@ class SuiteGeneratorTest {
         assertTrue(script.indexOf("\"optional\":true") > script.indexOf("\"id\":\"explorer\""));
         String readme = Files.readString(out.resolve("README.md"), StandardCharsets.UTF_8);
         assertTrue(readme.contains("```\n\nExplorer starts unticked, and without the window it is left out unless already "
-                + "installed. Tick it to install it too, or name `explorer` in `INSTALL_ONLY`.\n\n### Options"), readme);
+                + "installed. Tick it to install it too, or name `explorer` in `INSTALL_ONLY`.\n\n### Everything"), readme);
     }
 
     @Test
     void withNoOptionalMemberTheReadmeIsAsBefore() throws IOException {
         generate(suite());
         assertFalse(Files.readString(out.resolve("install.ps1")).contains("\"optional\""));
-        assertTrue(Files.readString(out.resolve("README.md")).contains("```\n\n### Options"));
+        assertTrue(Files.readString(out.resolve("README.md")).contains("```\n\n### Everything"));
     }
 
     @Test
@@ -240,6 +242,7 @@ class SuiteGeneratorTest {
         assertTrue(page.contains("<h3>Explorer</h3>"));
         assertTrue(page.indexOf("id=\"app-editor\"") < page.indexOf("id=\"app-explorer\""), "members in listed order");
         assertTrue(page.contains("$env:INSTALL_ONLY = 'editor,explorer'"));
+        assertTrue(page.contains("&amp; ([scriptblock]::Create((irm https://owner.github.io/install.ps1))) --install-everything --do-not-prompt-me"));
         assertTrue(page.contains("&amp; \"$env:LOCALAPPDATA\\Programs\\Editor\\uninstall.cmd\" -All"));
         assertTrue(page.contains("<a href=\"https://owner.github.io/docs/\">Docs</a>"));
         assertTrue(page.contains("https://github.com/owner/framework/issues/new"));

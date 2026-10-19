@@ -32,6 +32,18 @@ window *before* the install command; with it, `INSTALL_ONLY` says which boxes st
 $env:INSTALL_ONLY = '{{EXAMPLE_IDS}}'
 ```{{OPTIONAL}}
 
+### Everything, without being asked
+
+Run the script as a script block, which takes arguments, as `irm | iex` cannot:
+
+```powershell
+& ([scriptblock]::Create((irm {{INSTALL_URL}}))) --install-everything --do-not-prompt-me
+```
+
+`--install-everything` installs every application, the optional ones too (`$env:INSTALL_EVERYTHING = '1'`
+does the same), and `--do-not-prompt-me` opens no window and asks nothing (as `$env:INSTALL_QUIET = '1'`).
+Either one works alone.
+
 ### Options
 
 These are passed on to every application's installer:

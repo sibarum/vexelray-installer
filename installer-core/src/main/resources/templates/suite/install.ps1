@@ -16,6 +16,11 @@
 #   INSTALL_FORCE=1            "
 #   INSTALL_SKIP_CHECKS=1      "
 #   INSTALL_QUIET=1            no window: ask nothing and report in the console only
+#   INSTALL_EVERYTHING=1       the optional applications too, like the rest
+# Or as arguments, to the script run from a file or as a script block:
+#   & ([scriptblock]::Create((irm {{INSTALL_URL}}))) --install-everything --do-not-prompt-me
+#   --install-everything       INSTALL_EVERYTHING=1
+#   --do-not-prompt-me         INSTALL_QUIET=1 (-Quiet is the same)
 # INSTALL_VERSION and INSTALL_DIR name one application's version and folder, so they are not passed
 # on: run that application's own installer to use them. An application this script pins to a version
 # (a preflight of snapshot builds) is installed at that version, and reinstalled even when it is current.
@@ -23,8 +28,8 @@
 # Run from a console a person is at, the installer opens one window: a box for each application (those in
 # INSTALL_ONLY, or else those not installed or out of date, are ticked) and the shortcut, PATH and file-type
 # choices for all of them, then each application's progress, then what happened to each. The applications'
-# own installers run quietly inside it. It stays in the console when INSTALL_QUIET is set (or -Quiet is
-# passed to the script run from a file), under CI, with -NonInteractive, or when its output is redirected.
+# own installers run quietly inside it. It stays in the console when INSTALL_QUIET is set (or
+# --do-not-prompt-me or -Quiet is passed), under CI, with -NonInteractive, or when its output is redirected.
 
 $SuiteCfg = '{{CONFIG_JSON}}' | ConvertFrom-Json
 
@@ -660,9 +665,16 @@ function SuiteInstall([bool]$quiet) {
 }
 
 $SuiteQuiet = $false
+$SuiteEverything = $env:INSTALL_EVERYTHING -eq '1'
 foreach ($SuiteA in $args) {
-    if ($SuiteA -match '^-Quiet$') { $SuiteQuiet = $true } else { Write-Warning "Ignoring unknown argument: $SuiteA" }
+    switch -Regex ($SuiteA) {
+        '^(-Quiet|--do-not-prompt-me)$' { $SuiteQuiet = $true }
+        '^--install-everything$' { $SuiteEverything = $true }
+        default { Write-Warning "Ignoring unknown argument: $SuiteA" }
+    }
 }
+# everything: the optional applications are treated like the rest (INSTALL_ONLY still says which, when set)
+if ($SuiteEverything) { foreach ($SuiteM in @($SuiteCfg.members | Where-Object { $_.optional })) { $SuiteM.optional = $false } }
 $SuiteOk = $false
 try {
     $SuiteOk = [bool](SuiteInstall $SuiteQuiet | Select-Object -Last 1)

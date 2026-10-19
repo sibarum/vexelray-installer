@@ -81,6 +81,16 @@ try {
     Gen @('--suite', "$root\optional.json", '--out', "$root\optional", '--base-url', "$base/optional")
     $o = Run "irm $base/optional/install.ps1 | iex"
     Check (-not (Rec 'vi-sa') -and $o -match 'VI-SA\s+not selected') 'optional vi-sa not installed, and reported'
+    $o = Run "& ([scriptblock]::Create((irm $base/optional/install.ps1))) --do-not-prompt-me"
+    Check (-not (Rec 'vi-sa')) '--do-not-prompt-me alone leaves it out too'
+    $o = Run "& ([scriptblock]::Create((irm $base/optional/install.ps1))) --install-everything --do-not-prompt-me"
+    Check ((Rec 'vi-sa').version -eq '1.0.0' -and $o -notmatch 'Ignoring unknown argument') '--install-everything installs it'
+    & "$root\inst\vi-sa\uninstall.cmd" -Id vi-sa -Yes 2>&1 | Out-Null
+    Start-Sleep -Seconds 6
+    $o = Run "`$env:INSTALL_EVERYTHING = '1'; irm $base/optional/install.ps1 | iex"
+    Check ((Rec 'vi-sa').version -eq '1.0.0') 'and so does INSTALL_EVERYTHING=1'
+    & "$root\inst\vi-sa\uninstall.cmd" -Id vi-sa -Yes 2>&1 | Out-Null
+    Start-Sleep -Seconds 6
     $o = Run "`$env:INSTALL_ONLY = 'vi-sa'; irm $base/optional/install.ps1 | iex"
     Check ((Rec 'vi-sa').version -eq '1.0.0') 'named in INSTALL_ONLY, it is installed'
 
