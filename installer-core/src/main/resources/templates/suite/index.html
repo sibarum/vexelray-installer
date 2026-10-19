@@ -82,6 +82,7 @@
   .app h3 { margin: 0; font-size: 1.08rem; letter-spacing: -0.01em; }
   .app h3 a { color: var(--text); text-decoration: none; }
   .app h3 a:hover { color: var(--cyan); }
+  .app h3 .opt { margin-left: 6px; padding: 2px 6px; border: 1px solid var(--line-2); border-radius: 4px; font: 600 0.68rem/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); vertical-align: middle; }
   .app p { margin: 3px 0 0; color: var(--muted); font-size: 0.92rem; line-height: 1.5; }
 
   .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); }
@@ -208,7 +209,7 @@
           <summary>Install only some of them</summary>
           <p>Untick the others in the window that opens. To choose ahead of it, or without a window, set <code>INSTALL_ONLY</code> in the same PowerShell window before the install line:</p>
           <div class="cmd plain"><code id="only">$env:INSTALL_ONLY = '{{EXAMPLE_IDS}}'</code><button class="copy" type="button" data-copy="only">Copy</button></div>
-          <p>The ids are {{ID_LIST}}.</p>
+          <p>The ids are {{ID_LIST}}.</p>{{OPTIONAL}}
         </details>
         <details id="update">
           <summary>Update</summary>

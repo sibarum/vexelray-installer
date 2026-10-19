@@ -30,7 +30,7 @@ window *before* the install command; with it, `INSTALL_ONLY` says which boxes st
 
 ```powershell
 $env:INSTALL_ONLY = '{{EXAMPLE_IDS}}'
-```
+```{{OPTIONAL}}
 
 ### Options
 

@@ -34,7 +34,10 @@ import java.util.regex.Pattern;
 public final class SuiteGenerator {
 
     /** One member, read from its installer.json. */
-    private record Resolved(InstallerConfig config, SuiteConfig.Member member, String manifestUrl, Path configDir, String version) {}
+    private record Resolved(InstallerConfig config, SuiteConfig.Member member, String manifestUrl, Path configDir, String version) {
+        /** Left out unless asked for; a pinned member never is, since a preflight installs everything built together. */
+        boolean optional() { return Boolean.TRUE.equals(member.optional) && version == null; }
+    }
 
     /**
      * @param baseDir member {@code config} paths are resolved against this (the suite config's folder)
@@ -94,6 +97,7 @@ public final class SuiteGenerator {
                 ? "Running the same line again installs these versions again, so a rebuilt snapshot replaces the one installed."
                 : "Running the same line again updates each of them to its latest version.");
         vars.put("EXAMPLE_IDS", exampleIds(members));
+        vars.put("OPTIONAL", optionalNote(members, false));
         vars.put("PS_EXAMPLE_DIR", WindowsTarget.powershellPath(WindowsTarget.installDir(first.config, first.config.windows)));
         vars.put("EXAMPLE_ID", first.config.id);
         vars.put("REGISTRY_DIR", WindowsTarget.registryDir(first.config.windows));
@@ -170,6 +174,7 @@ public final class SuiteGenerator {
         vars.put("CHANGES", changes(members));
         vars.put("EXAMPLE_IDS", html(exampleIds(members)));
         vars.put("ID_LIST", idList(members));
+        vars.put("OPTIONAL", optionalNote(members, true));
         vars.put("PS_EXAMPLE_DIR", html(WindowsTarget.powershellPath(WindowsTarget.installDir(first.config, first.config.windows))));
         vars.put("SOURCE", InstallerConfig.blank(s.repo) ? "" : "<p>The script, the manifests and the releases are all in one public repository, <a href=\""
                 + attr("https://github.com/" + s.repo) + "\">" + html(s.repo) + "</a>.</p>");
@@ -226,6 +231,7 @@ public final class SuiteGenerator {
             n.put("manifestUrl", r.manifestUrl);
             n.put("registryDir", WindowsTarget.registryDir(r.config.windows));
             if (r.version != null) n.put("version", r.version);
+            if (r.optional()) n.put("optional", true);
         }
         String idList = String.join(", ", members.stream().map(r -> r.config.id).toList());
 
@@ -273,7 +279,7 @@ public final class SuiteGenerator {
         }
         b.append("          <div class=\"app-body\">");
         if (icon != null) b.append("<img src=\"").append(attr(icon)).append("\" alt=\"\">");
-        b.append("<div><h3>").append(title).append("</h3><p>").append(prose(r.config.descriptionOrDefault()))
+        b.append("<div><h3>").append(title).append(r.optional() ? " <span class=\"opt\">optional</span>" : "").append("</h3><p>").append(prose(r.config.descriptionOrDefault()))
                 .append("</p></div></div>\n        </article>\n");
         return b.toString();
     }
@@ -432,6 +438,20 @@ public final class SuiteGenerator {
         b.append("</p>");
         if (site != null && !InstallerConfig.blank(site.notice)) b.append("\n  <p class=\"legal\">").append(prose(site.notice)).append("</p>");
         return b.toString();
+    }
+
+    /** Which members start unticked, as a paragraph of the README or the page; empty when none do. */
+    private static String optionalNote(List<Resolved> members, boolean asHtml) {
+        List<Resolved> optional = members.stream().filter(Resolved::optional).toList();
+        if (optional.isEmpty()) return "";
+        String names = and(optional.stream().map(r -> asHtml ? html(r.config.name) : r.config.name).toList());
+        String ids = and(optional.stream().map(r -> asHtml ? "<code>" + html(r.config.id) + "</code>" : "`" + r.config.id + "`").toList());
+        String only = asHtml ? "<code>INSTALL_ONLY</code>" : "`INSTALL_ONLY`";
+        String text = names + (optional.size() == 1 ? " starts" : " start") + " unticked, and without the window "
+                + (optional.size() == 1 ? "it is" : "they are") + " left out unless already installed. Tick "
+                + (optional.size() == 1 ? "it" : "them") + " to install " + (optional.size() == 1 ? "it" : "them")
+                + " too, or name " + ids + " in " + only + ".";
+        return asHtml ? "\n          <p>" + text + "</p>" : "\n\n" + text;
     }
 
     private static String and(List<String> parts) {

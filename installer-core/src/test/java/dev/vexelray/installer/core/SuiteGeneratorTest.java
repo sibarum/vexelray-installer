@@ -127,6 +127,37 @@ class SuiteGeneratorTest {
     }
 
     @Test
+    void anOptionalMemberIsMarkedInTheScriptAndNamedInTheReadme() throws IOException {
+        SuiteConfig s = suite();
+        s.members.get(1).optional = true;
+        generate(s);
+
+        String script = Files.readString(out.resolve("install.ps1"), StandardCharsets.UTF_8);
+        assertEquals(1, script.split("\"optional\":true", -1).length - 1, "only the optional member is marked");
+        assertTrue(script.indexOf("\"optional\":true") > script.indexOf("\"id\":\"explorer\""));
+        String readme = Files.readString(out.resolve("README.md"), StandardCharsets.UTF_8);
+        assertTrue(readme.contains("```\n\nExplorer starts unticked, and without the window it is left out unless already "
+                + "installed. Tick it to install it too, or name `explorer` in `INSTALL_ONLY`.\n\n### Options"), readme);
+    }
+
+    @Test
+    void withNoOptionalMemberTheReadmeIsAsBefore() throws IOException {
+        generate(suite());
+        assertFalse(Files.readString(out.resolve("install.ps1")).contains("\"optional\""));
+        assertTrue(Files.readString(out.resolve("README.md")).contains("```\n\n### Options"));
+    }
+
+    @Test
+    void aPinnedMemberIsNeverOptional() throws IOException {
+        SuiteConfig s = suite();
+        s.members.get(1).optional = true;
+        s.members.get(1).version = "0.2.0-SNAPSHOT";
+        generate(s);
+        assertFalse(Files.readString(out.resolve("install.ps1")).contains("\"optional\""), "a preflight installs everything");
+        assertFalse(Files.readString(out.resolve("README.md")).contains("unticked"));
+    }
+
+    @Test
     void refusesAPinThatIsNotAVersion() {
         SuiteConfig s = suite();
         s.members.get(1).version = "1.0'; rm";
@@ -213,6 +244,22 @@ class SuiteGeneratorTest {
         assertTrue(page.contains("<a href=\"https://owner.github.io/docs/\">Docs</a>"));
         assertTrue(page.contains("https://github.com/owner/framework/issues/new"));
         assertTrue(page.contains("<span class=\"badge\">0.1.0 prerelease</span>"));
+    }
+
+    @Test
+    void thePageTagsAnOptionalMemberAndSaysHowToGetIt() throws IOException {
+        SuiteConfig s = siteSuite();
+        s.members.get(0).optional = true;
+        s.members.get(1).optional = true;
+        site(s);
+
+        String page = Files.readString(out.resolve("index.html"), StandardCharsets.UTF_8);
+        assertTrue(page.contains("<h3>Explorer <span class=\"opt\">optional</span></h3>"));
+        assertTrue(page.contains("Editor and Explorer start unticked, and without the window they are left out unless "
+                + "already installed. Tick them to install them too, or name <code>editor</code> and <code>explorer</code> "
+                + "in <code>INSTALL_ONLY</code>."));
+        site(siteSuite());
+        assertFalse(Files.readString(out.resolve("index.html")).contains("class=\"opt\""));
     }
 
     @Test

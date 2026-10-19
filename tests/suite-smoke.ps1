@@ -1,6 +1,6 @@
 #requires -Version 5.1
 # End-to-end test of a suite installer against a local web server: three members, one published twice
-# over, one never published. Installs through `irm | iex` and from a file, checks INSTALL_ONLY, that
+# over, one never published. Installs through `irm | iex` and from a file, checks INSTALL_ONLY, an optional member, that
 # INSTALL_DIR is not passed on, that a tampered member installer is refused, then uninstalls. Touches only
 # a temp dir, a temp registry dir, and HKCU's Uninstall keys and PATH (both restored). Run:
 #   powershell -File tests\suite-smoke.ps1
@@ -74,6 +74,16 @@ try {
     Check ((Test-Path "$root\inst\vi-sb\vi-sb.exe") -and -not (Test-Path "$root\wrong")) 'INSTALL_DIR was not passed on'
     Check (($o -replace '\s+', ' ') -match 'INSTALL_DIR applies to one application') 'and the user was told'
 
+    Write-Host "an optional member is left out unless named, then kept up to date once installed"
+    $opt = Get-Content -Raw "$root\suite.json" | ConvertFrom-Json
+    $opt.members[0] | Add-Member optional $true
+    $opt | ConvertTo-Json -Depth 6 | Set-Content -Encoding ASCII "$root\optional.json"
+    Gen @('--suite', "$root\optional.json", '--out', "$root\optional", '--base-url', "$base/optional")
+    $o = Run "irm $base/optional/install.ps1 | iex"
+    Check (-not (Rec 'vi-sa') -and $o -match 'VI-SA\s+not selected') 'optional vi-sa not installed, and reported'
+    $o = Run "`$env:INSTALL_ONLY = 'vi-sa'; irm $base/optional/install.ps1 | iex"
+    Check ((Rec 'vi-sa').version -eq '1.0.0') 'named in INSTALL_ONLY, it is installed'
+
     Write-Host "the whole suite, from a file (so a member's failure must not end the run)"
     Invoke-WebRequest -UseBasicParsing "$base/suite/install.ps1" -OutFile "$root\suite-install.ps1"
     $o = Run "& '$root\suite-install.ps1'; 'EXIT=' + [int]`$LASTEXITCODE"
@@ -86,8 +96,8 @@ try {
     [IO.File]::AppendAllText("$root\src\app.exe", "x")
     Gen @('--config', "$root\vi-sa.json", '--version', '1.1.0', '--out', "$root\site-vi-sa", '--assets', "$root\assets-vi-sa",
           '--base-url', "$base/site-vi-sa", '--asset-base-url', "$base/assets-vi-sa")
-    $o = Run "irm $base/suite/install.ps1 | iex"
-    Check ((Rec 'vi-sa').version -eq '1.1.0') 'vi-sa updated to 1.1.0'
+    $o = Run "irm $base/optional/install.ps1 | iex"
+    Check ((Rec 'vi-sa').version -eq '1.1.0') 'vi-sa updated to 1.1.0, by the suite where it is optional'
 
     Write-Host "a preflight suite installs the versions it pins, even over themselves"
     [IO.File]::AppendAllText("$root\src\app.exe", "y")

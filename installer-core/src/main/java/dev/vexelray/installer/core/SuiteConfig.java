@@ -39,6 +39,13 @@ public final class SuiteConfig {
          * rebuilt under the same version). For a preflight suite of snapshot builds.
          */
         public String version;
+        /**
+         * Optional: left out unless asked for. Its box in the window starts unticked, and an install without the
+         * window skips it, unless it is installed already (then it is kept up to date) or {@code INSTALL_ONLY}
+         * names it. For a demo, or an application not ready yet. Ignored when {@code version} pins it: a preflight
+         * installs everything built together.
+         */
+        public Boolean optional;
         /** Optional screenshot for the landing page, relative to the suite config. */
         public String image;
         /** What the screenshot shows, for readers who can't see it. */

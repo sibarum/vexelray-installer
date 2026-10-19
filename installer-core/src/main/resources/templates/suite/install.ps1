@@ -8,7 +8,8 @@
 # install.ps1, checks it against the SHA-256 the manifest records, and runs it.
 #
 # Options (set as environment variables before running the line above):
-#   INSTALL_ONLY=a,b           install only these applications ({{IDS}})
+#   INSTALL_ONLY=a,b           install only these applications ({{IDS}}); an optional one is
+#                              installed only when named here or ticked, or kept up to date once installed
 #   INSTALL_NO_SHORTCUTS=1     passed on to every application's installer
 #   INSTALL_NO_PATH=1          "
 #   INSTALL_NO_ASSOCIATIONS=1  "
@@ -411,7 +412,7 @@ function SuiteUiOptions($members, $manifests, [string[]]$only) {
         if ($rec) { $records += $rec }
         if (-not $manifests.ContainsKey($m.id)) {
             $info.Text = 'could not be checked; see the log'
-            $cb.Checked = (-not $only) -or ($only -contains $m.id)
+            $cb.Checked = if ($only) { $only -contains $m.id } else { -not $m.optional -or [bool]$rec }
             continue
         }
         $mf = $manifests[$m.id]
@@ -422,11 +423,13 @@ function SuiteUiOptions($members, $manifests, [string[]]$only) {
         $entry = @($mf.versions) | Where-Object { $_.version -eq $want } | Select-Object -First 1
         $mb = @($entry.platforms.windows.binaries | Where-Object { $_ })
         $bins += @($mb | ForEach-Object { [pscustomobject]@{ App = $m.name; Bin = $_ } })
-        if (-not $rec) { $info.Text = "$want" }
+        if (-not $rec) { $info.Text = if ($m.optional) { "$want, optional" } else { "$want" } }
         elseif ($rec.version -eq $want) { $info.Text = "$want, installed"; if (-not $m.version) { $current++ } }
         else { $info.Text = "$want (installed: $($rec.version))" }
-        # a pinned version is ticked even when installed: it may have been rebuilt since
-        if ($only) { $cb.Checked = $only -contains $m.id } else { $cb.Checked = -not $rec -or $rec.version -ne $want -or [bool]$m.version }
+        # a pinned version is ticked even when installed: it may have been rebuilt since; an optional one is ticked
+        # only once it is installed, to keep it up to date
+        if ($only) { $cb.Checked = $only -contains $m.id }
+        else { $cb.Checked = (-not $rec -and -not $m.optional) -or ($rec -and $rec.version -ne $want) -or [bool]$m.version }
     }
     $ui.Title.Text = "Install $($SuiteCfg.name)"
     $ui.Sub.Text = if ($published -gt 0 -and $current -eq $published) { 'Everything is installed and up to date. Tick an application to reinstall it.' }
@@ -601,7 +604,8 @@ function SuiteInstall([bool]$quiet) {
             SuiteUiPhase 'download'
         } else {
             if ($only.Count -gt 0) { $members = @($members | Where-Object { $only -contains $_.id }) }
-            $chosen = @($members | ForEach-Object { $_.id })
+            # an optional application only when asked for by name, or to keep one already installed up to date
+            $chosen = @($members | Where-Object { $only.Count -gt 0 -or -not $_.optional -or (SuiteRecord $_) } | ForEach-Object { $_.id })
         }
 
         SuiteSay "Installing $($SuiteCfg.name): $(($members | Where-Object { $chosen -contains $_.id } | ForEach-Object { $_.name }) -join ', ')"

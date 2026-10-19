@@ -148,7 +148,10 @@ the member's `repo`, `branch` and `repoPath`. `version` (optional) pins the memb
 version instead of the manifest's `latest`, and reinstalls it even when it is the one installed, since a snapshot is
 rebuilt under the same version. A suite whose members are all pinned to snapshots is a preflight: every snapshot
 built together, installable with one command while the public command keeps installing the releases. The install
-page then lists each member's version.
+page then lists each member's version. `optional: true` leaves a member out unless asked for, for a demo or an
+application not ready yet: its box starts unticked, and a run without the window skips it, unless it is installed
+already (then it is kept up to date like the rest) or `INSTALL_ONLY` names it. The install page names the optional
+members, and the landing page tags their cards. A pinned member is never optional, so a preflight installs everything.
 
 ### A landing page
 
