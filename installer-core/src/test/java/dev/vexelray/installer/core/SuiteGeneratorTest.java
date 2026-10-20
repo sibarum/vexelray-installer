@@ -354,8 +354,8 @@ class SuiteGeneratorTest {
         assertTrue(page.contains("<h3><a href=\"https://owner.github.io/docs/start.html\">Generate</a></h3><p>One &lt;command&gt;.</p>"));
         assertTrue(page.contains("<h3>Edit</h3><p>In <code>Editor</code>.</p>"));
         assertTrue(page.contains("<a class=\"button\" href=\"https://owner.github.io/docs/\">Read the guide</a>"));
-        assertTrue(page.contains("<a href=\"#apps\">Applications</a><a href=\"#build\">Developers</a><a href=\"#details\">Details</a><a href=\"https://owner.github.io/docs/\">Docs</a>"),
-                "the header names it, after the members");
+        assertTrue(page.contains("<a href=\"#apps\">Applications</a><a href=\"https://owner.github.io/docs/\">Docs</a>"),
+                "the header links only the members and the site's links, not the section");
     }
 
     @Test
@@ -363,7 +363,7 @@ class SuiteGeneratorTest {
         site(siteSuite());
         String page = Files.readString(out.resolve("index.html"), StandardCharsets.UTF_8);
         assertFalse(page.contains("class=\"card\""));
-        assertTrue(page.contains("<a href=\"#apps\">Applications</a><a href=\"#details\">Details</a>"));
+        assertTrue(page.contains("<a href=\"#apps\">Applications</a><a href=\"https://owner.github.io/docs/\">Docs</a>"));
     }
 
     @Test

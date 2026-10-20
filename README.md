@@ -201,7 +201,7 @@ command with a copy button (and `site.heroAction` as a button under it), a card 
 `description`), and what the install changes on the computer, worked out from the members' configs: install
 folders, shortcuts, the commands added to `PATH` and the applications that register file types. Each of
 `site.sections` goes between the members and those details, as a title, a paragraph, a row of cards (a card's `url`
-is optional, and so is its `stat`, a figure set large above its title) and an optional button, and gets a header link (`nav`, or its `title`) to its `id`. Text in the config
+is optional, and so is its `stat`, a figure set large above its title) and an optional button. The header links only the members and `site.links`, never a section. Text in the config
 may use `` `code` ``; everything else is escaped. `site.footerLinks` go in the footer after the source link, and
 `site.notice` is set in small print under them. The members' manifests stay where their own runs published them,
 so installs and updaters are the same whichever command installed them. Publish the folder from its repo's root with

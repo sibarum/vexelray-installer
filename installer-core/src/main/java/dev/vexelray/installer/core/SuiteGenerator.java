@@ -402,12 +402,9 @@ public final class SuiteGenerator {
         return p;
     }
 
+    /** The header: the members, then the site's links. The page's own sections get none; it scrolls to them. */
     private static String nav(SuiteConfig.Site site, String repo) {
         StringBuilder b = new StringBuilder("<a href=\"#apps\">Applications</a>");
-        for (SuiteConfig.Section sec : sectionList(site))   // checked by sections(), which runs first
-            b.append("<a href=\"#").append(sec.id).append("\">")
-                    .append(html(InstallerConfig.blank(sec.nav) ? sec.title.trim() : sec.nav.trim())).append("</a>");
-        b.append("<a href=\"#details\">Details</a>");
         for (SuiteConfig.Link l : site.links == null ? List.<SuiteConfig.Link>of() : site.links) {
             if (l == null || InstallerConfig.blank(l.label) || InstallerConfig.blank(l.url))
                 throw new InstallerException("every 'site.links' entry needs a 'label' and a 'url'");
