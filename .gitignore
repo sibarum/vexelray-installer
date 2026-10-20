@@ -2,3 +2,4 @@ target/
 /installer.json
 /dist/
 /build/
+.claude/
