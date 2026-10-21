@@ -39,6 +39,33 @@ final class IconFiles {
     }
 
     /**
+     * The {@code .png} that Linux menus and file types need: a square {@code .png} as it is, or the largest frame of an
+     * {@code .ico} when that frame is a PNG (as the 256px one usually is).
+     */
+    static void toPng(Path source, Path dest) throws IOException {
+        String name = source.getFileName().toString().toLowerCase(Locale.ROOT);
+        if (name.endsWith(".svg"))
+            throw new InstallerException("icon " + source + " is an SVG; convert it to a square .png (256px or more) first");
+        if (!name.endsWith(".png") && !name.endsWith(".ico"))
+            throw new InstallerException("icon " + source + " must be an .ico or a square .png");
+        Map.Entry<byte[], String> web = forWeb(source);
+        if (!web.getValue().equals("png"))
+            throw new InstallerException("icon " + source + " has no PNG frame for Linux to use; give a square .png (256px or more)");
+        BufferedImage img = ImageIO.read(new java.io.ByteArrayInputStream(web.getKey()));
+        if (img == null) throw new InstallerException("icon " + source + " is not a readable PNG");
+        if (img.getWidth() != img.getHeight())
+            throw new InstallerException("icon " + source + " must be square, not " + img.getWidth() + "x" + img.getHeight());
+        Files.write(dest, web.getKey());
+    }
+
+    /** The width of a square PNG icon, which names its folder in an icon theme ({@code 256x256}). */
+    static int pngSize(Path png) throws IOException {
+        BufferedImage img = ImageIO.read(png.toFile());
+        if (img == null) throw new InstallerException("not a readable PNG: " + png);
+        return img.getWidth();
+    }
+
+    /**
      * The icon as a web page shows it: the largest frame of an {@code .ico} when that frame is a PNG (as the
      * 256px one usually is), else the file as it is. Returns the bytes and the extension to serve them under.
      */

@@ -67,7 +67,11 @@ abstract class AbstractInstallerMojo extends AbstractMojo {
     @Parameter
     PlatformConfig windows;
 
-    /** Where install.ps1, manifest.json and the README are written; commit these to the project repo. */
+    /** The Linux installer: its own binaries (a Linux build, not the Windows one). */
+    @Parameter
+    PlatformConfig linux;
+
+    /** Where install.ps1, install.sh, manifest.json and the README are written; commit these to the project repo. */
     @Parameter(property = "installer.outputDirectory", defaultValue = "${project.build.directory}/installer")
     File outputDirectory;
 
@@ -103,8 +107,9 @@ abstract class AbstractInstallerMojo extends AbstractMojo {
         c.tagFormat = tagFormat;
         c.issuesUrl = issuesUrl;
         c.windows = windows;
-        if (windows != null && windows.binaries != null) {
-            for (BinaryConfig b : windows.binaries) resolveAttached(b);
+        c.linux = linux;
+        for (PlatformConfig p : new PlatformConfig[] {windows, linux}) {
+            if (p != null && p.binaries != null) for (BinaryConfig b : p.binaries) resolveAttached(b);
         }
 
         GenerationRequest req = new GenerationRequest();

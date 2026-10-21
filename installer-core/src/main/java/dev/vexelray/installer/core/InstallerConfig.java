@@ -3,7 +3,7 @@ package dev.vexelray.installer.core;
 /**
  * What a project says about its installer. Plain mutable fields so the same class is filled by
  * Jackson (installer.json) and by Maven's plugin configuration. A platform is enabled by giving
- * it a section; today only {@code windows} exists.
+ * it a section: {@code windows}, {@code linux}, or both.
  */
 public final class InstallerConfig {
     /** Lowercase id; names the install record and the Apps entry. */
@@ -28,6 +28,8 @@ public final class InstallerConfig {
     public String issuesUrl;
 
     public PlatformConfig windows;
+    /** Its own binaries: a Linux build is not the Windows one. */
+    public PlatformConfig linux;
 
     public String branchOrDefault() { return blank(branch) ? "main" : branch; }
     public String tagFormatOrDefault() { return blank(tagFormat) ? "v{version}" : tagFormat; }

@@ -4,12 +4,15 @@ Turns a native-image executable and/or a compiled uberjar into a one-line instal
 from a public GitHub repo.
 
 ```
-your build ──► installer:generate ──► install.ps1  uninstall.ps1  update.ps1  diagnose.ps1  manager.ps1  manifest.json  README.md
+your build ──► installer:generate ──► install.ps1  uninstall.ps1  update.ps1  diagnose.ps1  manager.ps1     (windows)
+                                  ├─► install.sh  uninstall.sh  update.sh  manifest.linux.txt            (linux)
+                                  ├─► manifest.json  README.md
                                   └─► staged artifacts ──► installer:publish ──► GitHub release
 ```
 
-Windows is supported today. The generator is platform-neutral and `manifest.json` is organised
-per platform; macOS and Linux arrive as new `PlatformTarget`s with their own templates.
+Windows and Linux are supported, each from a section of its own in the config, with its own binaries: a
+project gives a `windows` section, a `linux` section, or both. The generator is platform-neutral and
+`manifest.json` is organised per platform; macOS arrives as another `PlatformTarget` with its own templates.
 
 ## Modules
 
@@ -21,6 +24,7 @@ per platform; macOS and Linux arrive as new `PlatformTarget`s with their own tem
 Build and test everything: `mvn install` (Java 21+). End to end on Windows:
 `powershell -File tests\smoke.ps1`. The installer windows: `powershell -File tests\window.ps1` and
 `powershell -File tests\suite-window.ps1` (they drive them with the mouse, so they need an unlocked desktop).
+End to end on Linux: `sh tests/linux-smoke.sh`.
 
 ## Use from Maven
 
@@ -59,11 +63,19 @@ A complete example is in [tests/maven-sample](tests/maven-sample/pom.xml).
    artifacts (token in `$GITHUB_TOKEN`, or the variable named by `-Dinstaller.tokenEnv`). Add
    `-Dinstaller.dryRun` to see what would be uploaded. `publish` is never bound to a phase.
 3. Commit `install.ps1`, `uninstall.ps1`, `update.ps1`, `diagnose.ps1`, `manager.ps1`, `manifest.json` and `README.md` from
-   `target/installer/` to the project repo (or point `outputDirectory` at a checkout of it).
-   The README contains the one-liner:
+   `target/installer/` to the project repo (or point `outputDirectory` at a checkout of it); with a `<linux>`
+   section, `install.sh`, `uninstall.sh`, `update.sh` and `manifest.linux.txt` too.
+   The README contains the one-liners:
    ```powershell
    irm https://raw.githubusercontent.com/owner/project/main/install.ps1 | iex
    ```
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/owner/project/main/install.sh | sh
+   ```
+
+A `<linux>` section takes the same fields as `<windows>`, with Linux builds as its binaries: a native image built
+on Linux, the same uberjar, a `.tar.gz` where Windows has a `.zip`. Built on a Linux machine, they come from its
+`target-linux/`; built elsewhere, point `source` at them.
 
 Every run merges into the existing `manifest.json`, so every version ever published stays in its
 `versions` history; `latest` is the highest non-prerelease. If `README.md` in the output dir was
@@ -85,6 +97,12 @@ Defaults come from the project: `id` = artifactId, `name` = project name, `descr
 | `windows.binaries[]` | `source` *or* `attached` (`main` or a classifier), `name`, `file`, `kind` (`native`/`jar`/`archive`/`file`, inferred from the extension; a `.zip` is an archive, and a `.txt`, `.md`, `.html`, `.pdf` or `.rtf` a file), `dir`, `version`, `addToPath`, `icon` (an `.ico`, or a square `.png` of 256px or more that is converted to one; used by the shortcuts and the Apps entry), `shortcuts {desktop, startMenu, label, gui}`, `javaMin` (jars), `jvmArgs[]` (jars; placed before `-jar`), `runtime` (jars; id of an install that provides `binjava.exe`, found through the registry at launch), `exposes` (archives; `{command: path-inside-zip}`, recorded under `commands`), `signedBy` + `signerThumbprint` (native exes; see Signing), `fileAssociations[] {extension, description, contentType, icon}` (not archives; see File associations) |
 | `windows.requires[]` | `{id, min}`: installs that must be present first. A binary's `runtime` is required implicitly. The installer refuses, before changing anything, if one is missing or older than `min`; the uninstaller warns when removing something another install still needs |
 | `windows.system` | what the computer must have: `windows` (oldest version, `10.0.19041` or a build number), `memoryMb`, `diskMb` (free on the install drive), `vulkan` (`1.3`), `vulkanExtensions[]`, `d3d12` (feature level, `11_0` to `12_2`). The GPU fields must all be met by one GPU: its Vulkan device, and the DXGI adapter with the same LUID. See Diagnostics |
+| `linux.installDir` | default `$HOME/.local/opt/{id}`; starts with `/`, `~/`, `$HOME/` or `$XDG_DATA_HOME/`, and may use `{id}` and `{name}` |
+| `linux.registryDir` | where install manifests live; default `$XDG_DATA_HOME/vexelray-installer/installs` (`~/.local/share/...`) |
+| `linux.binaries[]` | as `windows.binaries[]`, except: an archive is a `.tar.gz` (or `.tgz`), whose `exposes` paths are checked against it; an `icon` is a square `.png` (an `.ico` gives its largest PNG frame), shipped as `<name>.png`; `shortcuts.startMenu` is a menu entry, `shortcuts.desktop` a launcher in the Desktop folder if there is one, and `shortcuts.gui` (default true) is `Terminal=false`; `addToPath` links the command into `~/.local/bin`; `signedBy` does not apply |
+| `linux.requires[]` | as `windows.requires[]` |
+| `linux.system` | `glibc` (oldest, `2.31`), `memoryMb`, `diskMb`, `vulkan`, `vulkanExtensions[]` (one Vulkan device must have them all, read from `vulkaninfo`) |
+| `linux.arch` | what `uname -m` must say; default `x86_64` when there is a native binary or an archive, none for jars and files |
 | `outputDirectory`, `assetsDirectory` | default `target/installer` and `target/installer-assets` |
 | `notes`, `baseUrl`, `assetBaseUrl`, `skip` | release notes; URL overrides for testing; skip the goal |
 
@@ -128,6 +146,12 @@ refuses it unless it matches the SHA-256 the manifest records (`tools.install.ps
 whose manifest is not published yet is skipped and reported. `INSTALL_ONLY=a,b` limits the run to some
 members. `INSTALL_NO_SHORTCUTS`, `INSTALL_NO_PATH`, `INSTALL_NO_ASSOCIATIONS`, `INSTALL_FORCE` and `INSTALL_SKIP_CHECKS` pass through to
 every member; `INSTALL_VERSION` and `INSTALL_DIR` name one application, so they are set aside.
+
+When any member has a `linux` section, the suite also gets an `install.sh` (`curl -fsSL <url> | sh`) and the page
+a Linux part: the same plan, run through each member's own `install.sh` against its `manifest.linux.txt`, with the
+same `INSTALL_*` variables (set for the `sh`: `curl -fsSL <url> | INSTALL_ONLY=a,b sh`) and
+`sh -s -- --install-everything`. It has no window. A member with only a `windows` section is left out of it and
+said to have no Linux version, and one with only a `linux` section out of `install.ps1`.
 
 Run from a console a person is at, the suite installer opens one window, under the same rules as an
 application's (`INSTALL_QUIET=1` or `-Quiet`, `CI`, `-NonInteractive` or redirected output keep it in the
@@ -208,10 +232,14 @@ folders, shortcuts, the commands added to `PATH` and the applications that regis
 `site.sections` goes between the members and those details, as a title, a paragraph, a row of cards (a card's `url`
 is optional, and so is its `stat`, a figure set large above its title) and an optional button. The header links only the members and `site.links`, never a section. Text in the config
 may use `` `code` ``; everything else is escaped. `site.footerLinks` go in the footer after the source link, and
-`site.notice` is set in small print under them. `site.linux` offers Linux builds for download before Linux has an
-installer: a switch above the command, starting on the visitor's own system, chooses between the install line and a
-button to `site.linux.url` with its `text` and `requirements`, and its `steps` become one more of the details (without
-script there is no switch, and both are shown). The members' manifests stay where their own runs published them,
+`site.notice` is set in small print under them. When members have `linux` sections, a switch above the command,
+starting on the visitor's own system, chooses between the Windows line and the Linux one (`curl -fsSL <site.url>/install.sh | sh`,
+with `install.sh` written beside the page), and an *On Linux* detail says what it changes and how to choose and
+uninstall; `site.linux.requirements`, if set, goes under the Linux line. Without Linux members, `site.linux`
+offers Linux builds for download instead: the switch chooses between the install line and a button to
+`site.linux.url` with its `text` and `requirements`, and its `steps` become one more of the details (without
+script there is no switch, and both are shown). A `site.linux.url` beside Linux members is refused. The page
+needs at least one member with a `windows` section. The members' manifests stay where their own runs published them,
 so installs and updaters are the same whichever command installed them. Publish the folder from its repo's root with
 GitHub Pages (**Settings > Pages > Deploy from a branch**).
 
@@ -317,19 +345,56 @@ GitHub Pages (**Settings > Pages > Deploy from a branch**).
 - **update.ps1** (`update.cmd`) compares per-binary versions in the latest manifest entry with
   the install record (`-Check`, `-Yes`), then runs the hash-verified `install.ps1`.
 
+### On Linux
+
+The Linux scripts are POSIX `sh` (dash, bash, busybox), and need `curl` or `wget`, `tar`, `awk` and `sha256sum`.
+sh cannot read JSON, so they read `manifest.linux.txt` instead: the Linux part of every version in `manifest.json`,
+one tab-separated record a line, rewritten from it on every run (its format is documented in `LinuxTarget`).
+
+- **install.sh** works as `install.ps1` does, for the user only and without root: every download is checked
+  against its SHA-256 before anything is placed, through the same cache (`<registryDir>/../cache`, resumed with
+  `curl -C -`), and placing goes through `<registryDir>/<id>.journal`, so a failure, Ctrl+C or a killed run is
+  rolled back (by the next run, for a killed one) and a run that got as far as its commit is finished. Files go to
+  `installDir` (default `~/.local/opt/<id>`), executable; a `.tar.gz` is unpacked with its modes kept, after
+  refusing an entry that would leave its folder; a jar gets a launcher script named after it, which finds Java
+  through its `runtime`'s `<id>.home`, `JAVA_HOME` or `PATH`. `addToPath` links the command into `~/.local/bin`,
+  never over a file that is not its own, and says so when `~/.local/bin` is not on `PATH` yet. Shortcuts are
+  desktop entries (`~/.local/share/applications/vexelray-<id>-<name>.desktop`, and a launcher in the Desktop
+  folder), with the binary's PNG icon. File types are a shared-mime-info package
+  (`~/.local/share/mime/packages/vexelray-<id>.xml`) whose globs weigh less than the usual, so an extension
+  another type has keeps it; a type without a `contentType` is the install's own (`application/x-<id>-<ext>`) and
+  gets the association's icon in `hicolor`. The binary's desktop entry lists the types, and becomes the default
+  (`xdg-mime default`) only for a type no program is the default of. The system requirements are checked as on
+  Windows (the GPU through `vulkaninfo`, from `vulkan-tools`; without it the GPU is a warning, not a failure). The
+  record is the same JSON as on Windows (`<registryDir>/<id>.json` and `install-manifest.json`, with
+  `platform: linux`), beside `<id>.state`, the same in lines for the scripts. Options: `INSTALL_VERSION`,
+  `INSTALL_DIR`, `INSTALL_NO_SHORTCUTS`, `INSTALL_NO_PATH`, `INSTALL_NO_ASSOCIATIONS`, `INSTALL_FORCE`,
+  `INSTALL_SKIP_CHECKS`, `INSTALL_REGISTRY_DIR`, or `sh -s -- --version 1.2.3 --no-path ...`.
+- **uninstall.sh** removes what the record lists (a link only while it is still a link), takes its entry out of
+  `mimeapps.list`, and leaves files the user added (`--list`, `--id`, `--all`, `--yes`; it asks on the terminal
+  otherwise, and refuses without one).
+- **update.sh** compares the installed version with the manifest's latest Linux version (`--check`, `--yes`), then
+  runs the hash-verified `install.sh` into the same folder with the same choices.
+
+There is no window, no app manager and no diagnostic report on Linux yet.
+
 The generated scripts are pure ASCII with LF endings, because their hashes are recorded in
-`manifest.json` and must survive `irm | iex` and git.
+`manifest.json` and must survive `irm | iex`, `curl | sh` and git.
 
 ## Adding a platform
 
-Implement `PlatformTarget` (scripts, manifest section, README section), put its templates under
-`installer-core/src/main/resources/templates/<key>/`, add a section for it to `InstallerConfig`,
+Implement `PlatformTarget` (scripts, manifest section, README section; and, if its scripts need them, template
+variables of their own, an icon format, checks, and companion files made from the manifest), put its templates
+under `installer-core/src/main/resources/templates/<key>/`, add a section for it to `InstallerConfig`,
 and register it in `InstallerGenerator`'s default target list.
 
 ## Known limits
 
 - `uninstall` and `update` are PowerShell scripts with `.cmd` launchers, not compiled `.exe`s.
 - Windows PowerShell 5.1 or newer; per-user install only (no admin, no HKLM).
+- Linux: per-user only (no root, no `/opt`); x86_64 unless `arch` says otherwise. An application's file types
+  and its menu entry show once the desktop rereads them, which the installer asks for when
+  `update-desktop-database` and `update-mime-database` are installed.
 - GitHub's raw host caches for a few minutes after a push.
 
 ## Tests
@@ -342,4 +407,9 @@ powershell -File tests\suite-smoke.ps1   # a suite of three: INSTALL_ONLY, unpub
 powershell -File tests\window.ps1        # the installer window, through UI Automation (moves the mouse)
 powershell -File tests\suite-window.ps1  # the suite window: pick members, cancel, a tampered member, stop a download
 powershell -File tests\manager.ps1       # the app manager in Edge, through the API its page uses (opens a window)
+```
+
+```sh
+sh tests/linux-smoke.sh            # on Linux: install, update, a tampered download, a killed install, a suite, uninstall
+SH=dash sh tests/linux-smoke.sh    # the same, with the generated scripts run by another shell
 ```

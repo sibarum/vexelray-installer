@@ -32,7 +32,10 @@ public final class InstallerGenerator {
     private static final Pattern EXTENSION = Pattern.compile("\\.[a-z0-9][a-z0-9_-]*");
     private static final Pattern MIME = Pattern.compile("[\\w.+-]+/[\\w.+-]+");
     /** Files installed as they are, never run: licences, readmes. */
-    private static final Pattern DOCUMENT = Pattern.compile("(?i).+\\.(txt|md|html?|pdf|rtf)");
+    /** Unpacked into a folder: a .zip on Windows, a gzipped tar on Linux. */
+    static final Pattern ARCHIVE = Pattern.compile("(?i).+\\.(zip|tar\\.gz|tgz)");
+    static final Pattern TARBALL = Pattern.compile("(?i).+\\.(tar\\.gz|tgz)");
+    private static final Pattern DOCUMENT =Pattern.compile("(?i).+\\.(txt|md|html?|pdf|rtf)");
     /** Extensions Windows runs or treats as code; taking one over would change how it executes. */
     private static final java.util.Set<String> RESERVED_EXTENSIONS = java.util.Set.of(
             ".exe", ".com", ".bat", ".cmd", ".ps1", ".psm1", ".lnk", ".url", ".msi", ".msp", ".scr", ".pif", ".cpl",
@@ -42,7 +45,7 @@ public final class InstallerGenerator {
 
     private final List<PlatformTarget> targets;
 
-    public InstallerGenerator() { this(List.of(new WindowsTarget())); }
+    public InstallerGenerator() { this(List.of(new WindowsTarget(), new LinuxTarget())); }
 
     public InstallerGenerator(List<PlatformTarget> targets) { this.targets = List.copyOf(targets); }
 
@@ -59,7 +62,7 @@ public final class InstallerGenerator {
         if (c == null) throw new InstallerException("no config");
         if (c.id == null || !ID.matcher(c.id).matches())
             throw new InstallerException("'id' is required: lowercase letters, digits, . _ -");
-        if (InstallerConfig.blank(c.name) || BAD_NAME.matcher(c.name).find())
+        if (InstallerConfig.blank(c.name) || BAD_NAME.matcher(c.name).find() || c.name.chars().anyMatch(ch -> ch < 0x20))
             throw new InstallerException("'name' is required and must be usable as a folder name");
         String version = !InstallerConfig.blank(r.version) ? r.version : c.version;
         if (InstallerConfig.blank(version))
@@ -73,7 +76,7 @@ public final class InstallerGenerator {
 
         List<PlatformTarget> active = new ArrayList<>();
         for (PlatformTarget t : targets) if (t.configOf(c) != null) active.add(t);
-        if (active.isEmpty()) throw new InstallerException("config enables no platform (add a 'windows' section)");
+        if (active.isEmpty()) throw new InstallerException("config enables no platform (add a 'windows' or a 'linux' section)");
 
         Path assetOut = r.assetsDir.resolve(version);
         Files.createDirectories(assetOut);
@@ -96,7 +99,7 @@ public final class InstallerGenerator {
             List<ResolvedBinary> bins = new ArrayList<>();
             java.util.Set<String> extensions = new java.util.HashSet<>();
             for (BinaryConfig b : p.binaries) {
-                ResolvedBinary rb = stage(c, b, version, tag, r, assetOut);
+                ResolvedBinary rb = stage(c, b, version, tag, r, assetOut, t.iconFormat());
                 for (FileAssociation fa : b.fileAssociations == null ? List.<FileAssociation>of() : b.fileAssociations)
                     if (!extensions.add(normalizeExtension(fa.extension)))
                         throw new InstallerException("two binaries associate the extension '" + normalizeExtension(fa.extension) + "'");
@@ -118,6 +121,7 @@ public final class InstallerGenerator {
                     assets.add(ti.staged());
                 }
             }
+            t.check(c, p, bins);
             resolved.put(t, bins);
         }
 
@@ -129,8 +133,10 @@ public final class InstallerGenerator {
             String installerUrl = baseUrl + "/" + t.scriptNames().get(0);
             String cfgJson = Json.compact(t.scriptConfig(c, t.configOf(c), manifestUrl)).replace("'", "''");
             for (String script : t.scriptNames()) {
-                String text = Templates.lf(Templates.render(t.key() + "/" + script, Map.of(
-                        "NAME", c.name, "CONFIG_JSON", cfgJson, "INSTALL_URL", installerUrl, "BASE_URL", baseUrl)));
+                Map<String, String> vars = new LinkedHashMap<>(Map.of(
+                        "NAME", c.name, "CONFIG_JSON", cfgJson, "INSTALL_URL", installerUrl, "BASE_URL", baseUrl));
+                vars.putAll(t.scriptVars(c, t.configOf(c), manifestUrl));
+                String text = Templates.lf(Templates.render(t.key() + "/" + script, vars));
                 Path dest = r.outDir.resolve(script);
                 writeText(dest, text, true);
                 written.add(dest);
@@ -192,6 +198,13 @@ public final class InstallerGenerator {
         history.forEach(versions::add);
         writeText(manifestPath, Json.pretty(manifest), false);
         written.add(manifestPath);
+        for (PlatformTarget t : active) {
+            for (var f : t.companionFiles(c, manifest).entrySet()) {
+                Path dest = r.outDir.resolve(f.getKey());
+                writeText(dest, f.getValue(), false);
+                written.add(dest);
+            }
+        }
 
         // 4. README
         StringBuilder sections = new StringBuilder();
@@ -208,7 +221,9 @@ public final class InstallerGenerator {
                 "DESCRIPTION", c.descriptionOrDefault(),
                 "PLATFORM_SECTIONS", sections.toString().stripTrailing() + "\n",
                 "MANIFEST_URL", manifestUrl,
-                "VERSION", latest)));
+                "VERSION", latest,
+                "PLANNED", resolved.keySet().stream().anyMatch(t -> t.key().equals("linux"))
+                        ? "A macOS installer is planned" : "macOS and Linux installers are planned")));
         Path readmePath = r.outDir.resolve("README.md");
         if (Files.exists(readmePath) && !Files.readString(readmePath, StandardCharsets.UTF_8).contains(README_MARKER)) {
             readmePath = r.outDir.resolve("INSTALL.md");
@@ -242,14 +257,14 @@ public final class InstallerGenerator {
     static void writeUtf8(Path path, String text) throws IOException { writeText(path, text, false); }
 
     private ResolvedBinary stage(InstallerConfig c, BinaryConfig b, String version, String tag,
-                                 GenerationRequest r, Path assetOut) throws IOException {
+                                 GenerationRequest r, Path assetOut, String iconFormat) throws IOException {
         if (InstallerConfig.blank(b.source)) throw new InstallerException("every binary needs a 'source' path");
         Path src = Path.of(b.source);
         if (!src.isAbsolute()) src = r.baseDir.resolve(src);
         if (!Files.isRegularFile(src)) throw new InstallerException("artifact not found: " + src);
         String file = InstallerConfig.blank(b.file) ? src.getFileName().toString() : b.file;
         String kind = InstallerConfig.blank(b.kind)
-                ? (file.endsWith(".jar") ? "jar" : file.endsWith(".zip") ? "archive"
+                ? (file.endsWith(".jar") ? "jar" : ARCHIVE.matcher(file).matches() ? "archive"
                         : DOCUMENT.matcher(file).matches() ? "file" : "native") : b.kind;
         if (!kind.equals("native") && !kind.equals("jar") && !kind.equals("archive") && !kind.equals("file"))
             throw new InstallerException("binary kind must be 'native', 'jar', 'archive' or 'file', not '" + kind + "'");
@@ -279,7 +294,7 @@ public final class InstallerGenerator {
         Files.copy(src, staged, StandardCopyOption.REPLACE_EXISTING);
 
         ResolvedBinary.ResolvedIcon icon = InstallerConfig.blank(b.icon) ? null
-                : stageIcon(c, r, tag, assetOut, iconSource(r, b.icon), name + ".ico");
+                : stageIcon(c, r, tag, assetOut, iconSource(r, b.icon), name + "." + iconFormat);
 
         // file-type icons: one .ico per distinct source, named <binary>-<source stem>.ico
         Map<String, ResolvedBinary.ResolvedIcon> typeIcons = new LinkedHashMap<>();
@@ -290,7 +305,7 @@ public final class InstallerGenerator {
             Path isrc = iconSource(r, fa.icon).toAbsolutePath().normalize();
             ResolvedBinary.ResolvedIcon ti = bySource.get(isrc);
             if (ti == null) {
-                String iconFile = name + "-" + stem(isrc.getFileName().toString()).replaceAll("[^A-Za-z0-9._-]", "-") + ".ico";
+                String iconFile = name + "-" + stem(isrc.getFileName().toString()).replaceAll("[^A-Za-z0-9._-]", "-") + "." + iconFormat;
                 Path other = byFile.putIfAbsent(iconFile.toLowerCase(java.util.Locale.ROOT), isrc);
                 if (other != null)
                     throw new InstallerException("file-type icons " + other + " and " + isrc + " would both ship as '"
@@ -315,7 +330,8 @@ public final class InstallerGenerator {
     private static ResolvedBinary.ResolvedIcon stageIcon(InstallerConfig c, GenerationRequest r, String tag, Path assetOut,
                                                          Path source, String iconFile) throws IOException {
         Path istaged = assetOut.resolve(iconFile);
-        IconFiles.toIco(source, istaged);
+        if (iconFile.endsWith(".png")) IconFiles.toPng(source, istaged);
+        else IconFiles.toIco(source, istaged);
         return new ResolvedBinary.ResolvedIcon(iconFile, assetUrl(c, r, tag, iconFile),
                 sha256(istaged), Files.size(istaged), istaged);
     }
@@ -332,7 +348,8 @@ public final class InstallerGenerator {
 
     /** An archive is unpacked as-is, so only what makes no sense for a folder is refused here. */
     private static void checkArchive(BinaryConfig b, Path zip, String file) throws IOException {
-        if (!file.endsWith(".zip")) throw new InstallerException("an archive must be a .zip file (" + file + ")");
+        if (!ARCHIVE.matcher(file).matches())
+            throw new InstallerException("an archive must be a .zip (Windows) or a .tar.gz (Linux) file (" + file + ")");
         if (b.fileAssociations != null && !b.fileAssociations.isEmpty())
             throw new InstallerException("archive '" + file + "' cannot set fileAssociations; associate the binary that opens the files");
         if (Boolean.TRUE.equals(b.addToPath) || b.shortcuts != null || !InstallerConfig.blank(b.icon)
@@ -340,10 +357,19 @@ public final class InstallerGenerator {
             throw new InstallerException("archive '" + file + "' cannot set addToPath, shortcuts, icon, javaMin, runtime or jvmArgs; "
                     + "expose commands with 'exposes' instead");
         java.util.Set<String> entries = new java.util.HashSet<>();
-        try (java.util.zip.ZipFile z = new java.util.zip.ZipFile(zip.toFile())) {
-            z.stream().forEach(e -> entries.add(e.getName().replace('\\', '/').toLowerCase(java.util.Locale.ROOT)));
-        } catch (java.util.zip.ZipException e) {
-            throw new InstallerException("not a valid zip: " + zip + " (" + e.getMessage() + ")");
+        if (TARBALL.matcher(file).matches()) {
+            for (String name : tarEntries(zip)) {
+                String n = name.replaceFirst("^(\\./)+", "");
+                if (n.startsWith("/") || n.matches("(?s)(.*/)?\\.\\.(/.*)?"))
+                    throw new InstallerException(file + " has an entry outside the folder it unpacks into: " + name);
+                entries.add(n.replaceFirst("/$", "").toLowerCase(java.util.Locale.ROOT));
+            }
+        } else {
+            try (java.util.zip.ZipFile z = new java.util.zip.ZipFile(zip.toFile())) {
+                z.stream().forEach(e -> entries.add(e.getName().replace('\\', '/').toLowerCase(java.util.Locale.ROOT)));
+            } catch (java.util.zip.ZipException e) {
+                throw new InstallerException("not a valid zip: " + zip + " (" + e.getMessage() + ")");
+            }
         }
         if (b.exposes != null) b.exposes.forEach((cmd, rel) -> {
             if (cmd == null || !cmd.matches("[A-Za-z0-9._-]+"))
@@ -354,6 +380,53 @@ public final class InstallerGenerator {
             if (!entries.contains(norm.toLowerCase(java.util.Locale.ROOT)))
                 throw new InstallerException("'exposes' path for '" + cmd + "' is not in " + file + ": " + rel);
         });
+    }
+
+    /**
+     * The entry names of a gzipped tar: ustar names with their prefix, GNU long names and pax {@code path} records,
+     * which together are what GNU tar and bsdtar write.
+     */
+    static List<String> tarEntries(Path tgz) throws IOException {
+        List<String> names = new ArrayList<>();
+        try (InputStream in = new java.io.BufferedInputStream(new java.util.zip.GZIPInputStream(Files.newInputStream(tgz)))) {
+            byte[] h = new byte[512];
+            String longName = null;
+            while (true) {
+                if (in.readNBytes(h, 0, 512) < 512) throw new InstallerException("truncated tar: " + tgz);
+                boolean end = true;
+                for (byte x : h) if (x != 0) { end = false; break; }
+                if (end) return names;
+                String size = field(h, 124, 12).trim();
+                long len = size.isEmpty() ? 0 : Long.parseLong(size, 8);
+                byte[] data = null;
+                char type = (char) h[156];
+                if (type == 'L' || type == 'x') data = in.readNBytes((int) len);
+                else in.skipNBytes(len);
+                in.skipNBytes((512 - len % 512) % 512);
+                if (type == 'L') { longName = new String(data, StandardCharsets.UTF_8).replaceFirst("\0.*$", ""); continue; }
+                if (type == 'x') {
+                    for (String rec : new String(data, StandardCharsets.UTF_8).split("\n")) {
+                        int sp = rec.indexOf(' ');
+                        if (sp > 0 && rec.startsWith("path=", sp + 1)) longName = rec.substring(sp + 6);
+                    }
+                    continue;
+                }
+                if (type == 'g') continue;
+                String name = longName != null ? longName
+                        : new String(h, 257, 5, StandardCharsets.US_ASCII).equals("ustar") && h[345] != 0
+                                ? field(h, 345, 155) + "/" + field(h, 0, 100) : field(h, 0, 100);
+                longName = null;
+                names.add(name);
+            }
+        } catch (java.util.zip.ZipException | NumberFormatException e) {
+            throw new InstallerException("not a valid .tar.gz: " + tgz + " (" + e.getMessage() + ")");
+        }
+    }
+
+    private static String field(byte[] h, int off, int len) {
+        int end = off;
+        while (end < off + len && h[end] != 0) end++;
+        return new String(h, off, end - off, StandardCharsets.UTF_8);
     }
 
     private static void checkAssociations(BinaryConfig b, String file) {
@@ -389,6 +462,7 @@ public final class InstallerGenerator {
     }
 
     private static String stem(String file) {
+        if (file.toLowerCase(java.util.Locale.ROOT).endsWith(".tar.gz")) return file.substring(0, file.length() - 7);
         int dot = file.lastIndexOf('.');
         return dot > 0 ? file.substring(0, dot) : file;
     }

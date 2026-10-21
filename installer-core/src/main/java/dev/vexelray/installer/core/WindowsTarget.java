@@ -50,6 +50,16 @@ public final class WindowsTarget implements PlatformTarget {
     }
 
     @Override
+    public void check(InstallerConfig c, PlatformConfig p, List<ResolvedBinary> bins) {
+        if (!InstallerConfig.blank(p.arch)) throw new InstallerException("'arch' is for the linux section; Windows installs on x64");
+        if (p.system != null && !InstallerConfig.blank(p.system.glibc))
+            throw new InstallerException("system.glibc is a Linux requirement; the windows section cannot set it");
+        for (ResolvedBinary b : bins)
+            if (b.isArchive() && !b.file().toLowerCase(Locale.ROOT).endsWith(".zip"))
+                throw new InstallerException("a Windows archive must be a .zip (" + b.file() + ")");
+    }
+
+    @Override
     public ObjectNode manifestEntry(InstallerConfig c, PlatformConfig p, List<ResolvedBinary> bins) {
         ObjectNode platform = Json.object();
         platform.put("installDir", installDir(c, p));

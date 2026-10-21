@@ -1,2 +1,4 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+# Shell scripts run on Linux from this checkout (a VM shares the folder), so they keep LF even on Windows
+*.sh text eol=lf

@@ -37,6 +37,13 @@ public final class SuiteGenerator {
     private record Resolved(InstallerConfig config, SuiteConfig.Member member, String manifestUrl, Path configDir, String version) {
         /** Left out unless asked for; a pinned member never is, since a preflight installs everything built together. */
         boolean optional() { return Boolean.TRUE.equals(member.optional) && version == null; }
+        boolean windows() { return config.windows != null; }
+        boolean linux() { return config.linux != null; }
+        /** The binaries the page takes an icon from: Windows's, or Linux's for a member without them. */
+        List<BinaryConfig> binaries() {
+            PlatformConfig p = config.windows != null ? config.windows : config.linux;
+            return p.binaries == null ? List.of() : p.binaries;
+        }
     }
 
     /**
@@ -70,37 +77,55 @@ public final class SuiteGenerator {
 
     private String run(SuiteConfig s, Path baseDir, Path outDir, String baseUrlOverride) throws IOException {
         List<Resolved> members = resolve(s, baseDir);
+        List<Resolved> win = members.stream().filter(Resolved::windows).toList();
+        List<Resolved> lin = members.stream().filter(Resolved::linux).toList();
         String baseUrl = InstallerGenerator.baseUrl(s.repo, s.branchOrDefault(), s.repoPathTrimmed(), baseUrlOverride);
-        String installUrl = baseUrl + "/install.ps1";
-        writeScript(s, members, outDir, installUrl);
+        String installUrl = baseUrl + "/install.ps1", shUrl = baseUrl + "/install.sh";
+        if (!win.isEmpty()) writeScript(s, win, outDir, installUrl);
+        if (!lin.isEmpty()) writeShScript(s, members, outDir, shUrl);
 
         boolean pinned = members.stream().anyMatch(r -> r.version != null);
-        List<String> table = new ArrayList<>();
-        table.add("| Application | What it is | Id |" + (pinned ? " Version |" : "") + " Installed to |");
-        table.add("| --- | --- | --- |" + (pinned ? " --- |" : "") + " --- |");
-        for (Resolved r : members) {
-            String name = InstallerConfig.blank(r.member.page) ? r.config.name : "[" + r.config.name + "](" + r.member.page + ")";
-            String version = !pinned ? "" : (r.version == null ? "latest" : "`" + r.version + "`") + " | ";
-            table.add("| " + name + " | " + r.config.descriptionOrDefault() + " | `" + r.config.id + "` | " + version
-                    + "`" + WindowsTarget.installDir(r.config, r.config.windows) + "` |");
-        }
-        Resolved first = members.get(0);
+        String rerun = pinned
+                ? "Running the same line again installs these versions again, so a rebuilt snapshot replaces the one installed."
+                : "Running the same line again updates each of them to its latest version.";
         Map<String, String> vars = new HashMap<>();
         vars.put("NAME", s.name);
         vars.put("DESCRIPTION", InstallerConfig.blank(s.description) ? "" : s.description.trim() + "\n");
         vars.put("SITE_LINE", s.site == null || InstallerConfig.blank(s.site.url) ? ""
                 : "\nThe install page is " + s.site.url.replaceAll("/+$", "") + ", which installs with a shorter command.\n");
-        vars.put("INSTALL_COMMAND", "irm " + installUrl + " | iex");
-        vars.put("INSTALL_URL", installUrl);
-        vars.put("MEMBER_TABLE", String.join("\n", table));
-        vars.put("RERUN", pinned
-                ? "Running the same line again installs these versions again, so a rebuilt snapshot replaces the one installed."
-                : "Running the same line again updates each of them to its latest version.");
-        vars.put("EXAMPLE_IDS", exampleIds(members));
-        vars.put("OPTIONAL", optionalNote(members, false));
-        vars.put("PS_EXAMPLE_DIR", WindowsTarget.powershellPath(WindowsTarget.installDir(first.config, first.config.windows)));
-        vars.put("EXAMPLE_ID", first.config.id);
-        vars.put("REGISTRY_DIR", WindowsTarget.registryDir(first.config.windows));
+        vars.put("PLANNED", lin.isEmpty() ? "macOS and Linux installers are planned." : "A macOS installer is planned.");
+        vars.put("WINDOWS", "");
+        vars.put("LINUX", "");
+        if (!win.isEmpty()) {
+            Resolved first = win.get(0);
+            Map<String, String> w = new HashMap<>();
+            w.put("INSTALL_COMMAND", "irm " + installUrl + " | iex");
+            w.put("INSTALL_URL", installUrl);
+            w.put("MEMBER_TABLE", memberTable(win, pinned, r -> WindowsTarget.installDir(r.config, r.config.windows)));
+            w.put("RERUN", rerun);
+            w.put("EXAMPLE_IDS", exampleIds(win));
+            w.put("OPTIONAL", optionalNote(win, false));
+            w.put("PS_EXAMPLE_DIR", WindowsTarget.powershellPath(WindowsTarget.installDir(first.config, first.config.windows)));
+            w.put("EXAMPLE_ID", first.config.id);
+            w.put("REGISTRY_DIR", WindowsTarget.registryDir(first.config.windows));
+            vars.put("WINDOWS", Templates.render("suite/README.windows.md", w));
+        }
+        if (!lin.isEmpty()) {
+            Resolved first = lin.get(0);
+            List<String> windowsOnly = members.stream().filter(r -> !r.linux()).map(r -> r.config.name).toList();
+            Map<String, String> l = new HashMap<>();
+            l.put("SH_COMMAND", "curl -fsSL " + shUrl + " | sh");
+            l.put("SH_URL", shUrl);
+            l.put("MEMBER_TABLE", memberTable(lin, pinned, r -> LinuxTarget.displayPath(LinuxTarget.installDir(r.config, r.config.linux))));
+            l.put("RERUN", rerun);
+            l.put("WINDOWS_ONLY", windowsOnly.isEmpty() ? "" : " " + and(windowsOnly)
+                    + (windowsOnly.size() == 1 ? " has" : " have") + " no Linux version yet, so " + (windowsOnly.size() == 1 ? "it is" : "they are") + " left out.");
+            l.put("EXAMPLE_IDS", exampleIds(lin));
+            l.put("OPTIONAL", optionalNoteLinux(lin, false));
+            l.put("SH_EXAMPLE_DIR", LinuxTarget.shellPath(LinuxTarget.installDir(first.config, first.config.linux)));
+            l.put("REGISTRY_DIR", LinuxTarget.displayPath(LinuxTarget.registryDir(first.config.linux)));
+            vars.put("LINUX", Templates.render("suite/README.linux.md", l));
+        }
         String readme = Templates.render("suite/README.md", vars);
         Path readmePath = outDir.resolve("README.md");
         if (Files.exists(readmePath)
@@ -108,7 +133,21 @@ public final class SuiteGenerator {
             readmePath = outDir.resolve("INSTALL.md");
         }
         InstallerGenerator.writeUtf8(readmePath, readme);
-        return "irm " + installUrl + " | iex";
+        return win.isEmpty() ? "curl -fsSL " + shUrl + " | sh" : "irm " + installUrl + " | iex";
+    }
+
+    /** The members, what each is and where it goes on one platform; a version column when any is pinned. */
+    private static String memberTable(List<Resolved> members, boolean pinned, java.util.function.Function<Resolved, String> dir) {
+        List<String> table = new ArrayList<>();
+        table.add("| Application | What it is | Id |" + (pinned ? " Version |" : "") + " Installed to |");
+        table.add("| --- | --- | --- |" + (pinned ? " --- |" : "") + " --- |");
+        for (Resolved r : members) {
+            String name = InstallerConfig.blank(r.member.page) ? r.config.name : "[" + r.config.name + "](" + r.member.page + ")";
+            String version = !pinned ? "" : (r.version == null ? "latest" : "`" + r.version + "`") + " | ";
+            table.add("| " + name + " | " + r.config.descriptionOrDefault() + " | `" + r.config.id + "` | " + version
+                    + "`" + dir.apply(r) + "` |");
+        }
+        return String.join("\n", table);
     }
 
     private String runSite(SuiteConfig s, Path baseDir, Path outDir) throws IOException {
@@ -119,13 +158,18 @@ public final class SuiteGenerator {
             throw new InstallerException("'site.url' must be an https:// address, not '" + site.url + "'");
         String sections = sections(site);
         String heroAction = heroAction(site);
-        checkLinux(site.linux);
+        List<Resolved> members = resolve(s, baseDir);
+        List<Resolved> win = members.stream().filter(Resolved::windows).toList();
+        List<Resolved> lin = members.stream().filter(Resolved::linux).toList();
+        if (win.isEmpty()) throw new InstallerException("the landing page needs at least one member with a 'windows' section");
+        checkLinux(site.linux, lin);
         Path logo = logo(site, baseDir);
         String footer = footer(s);
-        List<Resolved> members = resolve(s, baseDir);
         String installUrl = site.url.replaceAll("/+$", "") + "/install.ps1";
+        String shUrl = site.url.replaceAll("/+$", "") + "/install.sh";
         String command = "irm " + installUrl + " | iex";
-        writeScript(s, members, outDir, installUrl);
+        writeScript(s, win, outDir, installUrl);
+        if (!lin.isEmpty()) writeShScript(s, members, outDir, shUrl);
 
         Path img = outDir.resolve("img");
         Files.createDirectories(img);
@@ -152,7 +196,7 @@ public final class SuiteGenerator {
             cards.append(card(r, icon, shot));
         }
 
-        Resolved first = members.get(0);
+        Resolved first = win.get(0);
         Map<String, String> vars = new HashMap<>();
         vars.put("NAME", html(s.name));
         String description = InstallerConfig.blank(s.description) ? "" : s.description.trim();
@@ -172,19 +216,19 @@ public final class SuiteGenerator {
         vars.put("DESCRIPTION", prose(description));
         vars.put("APP_CARDS", cards.toString().stripTrailing());
         vars.put("SECTIONS", sections);
-        vars.put("CHANGES", changes(members));
-        vars.put("EXAMPLE_IDS", html(exampleIds(members)));
-        vars.put("ID_LIST", idList(members));
-        vars.put("OPTIONAL", optionalNote(members, true));
+        vars.put("CHANGES", changes(win));
+        vars.put("EXAMPLE_IDS", html(exampleIds(win)));
+        vars.put("ID_LIST", idList(win));
+        vars.put("OPTIONAL", optionalNote(win, true));
         vars.put("PS_EXAMPLE_DIR", html(WindowsTarget.powershellPath(WindowsTarget.installDir(first.config, first.config.windows))));
         vars.put("SOURCE", InstallerConfig.blank(s.repo) ? "" : "<p>The script, the manifests and the releases are all in one public repository, <a href=\""
                 + attr("https://github.com/" + s.repo) + "\">" + html(s.repo) + "</a>.</p>");
         vars.put("FEEDBACK", feedback(site));
-        vars.put("PLATFORM_TABS", site.linux == null ? "" : "        <div class=\"platforms\" id=\"platforms\" role=\"tablist\" aria-label=\"Your system\" hidden>"
+        vars.put("PLATFORM_TABS", site.linux == null && lin.isEmpty() ? "" :"        <div class=\"platforms\" id=\"platforms\" role=\"tablist\" aria-label=\"Your system\" hidden>"
                 + "<button type=\"button\" role=\"tab\" data-platform=\"windows\" aria-controls=\"get-windows\">Windows</button>"
                 + "<button type=\"button\" role=\"tab\" data-platform=\"linux\" aria-controls=\"get-linux\">Linux</button></div>");
-        vars.put("LINUX_HERO", linuxHero(site.linux));
-        vars.put("LINUX_DETAILS", linuxDetails(site.linux));
+        vars.put("LINUX_HERO", lin.isEmpty() ? linuxHero(site.linux) : linuxInstallHero(shUrl, site.linux));
+        vars.put("LINUX_DETAILS", lin.isEmpty() ? linuxDetails(site.linux) : linuxInstallDetails(shUrl, members, lin));
         vars.put("FOOTER", footer);
         InstallerGenerator.writeUtf8(outDir.resolve("index.html"), Templates.render("suite/index.html", vars));
         // Served as is: no Jekyll, which would otherwise skip files and folders it has opinions about.
@@ -210,7 +254,8 @@ public final class SuiteGenerator {
             InstallerConfig c = Json.read(Files.readString(p, StandardCharsets.UTF_8), InstallerConfig.class);
             if (!InstallerGenerator.validId(c.id)) throw new InstallerException(p + " has no valid 'id'");
             if (InstallerConfig.blank(c.name)) throw new InstallerException(p + " has no 'name'");
-            if (c.windows == null) throw new InstallerException(c.id + " has no 'windows' section; a suite installs on Windows only for now");
+            if (c.windows == null && c.linux == null) throw new InstallerException(c.id + " has neither a 'windows' nor a 'linux' section");
+            if (c.name.matches("(?s).*[\\t\\r\\n].*")) throw new InstallerException(p + " has a 'name' with a tab or a line break");
             if (!ids.add(c.id)) throw new InstallerException("the suite lists '" + c.id + "' twice");
             String manifestUrl = !InstallerConfig.blank(m.manifestUrl) ? m.manifestUrl
                     : InstallerGenerator.baseUrl(c.repo, c.branchOrDefault(), c.repoPathTrimmed(), null) + "/manifest.json";
@@ -250,6 +295,31 @@ public final class SuiteGenerator {
         InstallerGenerator.writeAscii(outDir.resolve("install.ps1"), script);
     }
 
+    /**
+     * The suite's {@code install.sh}: the same plan for Linux, which runs each member's own {@code install.sh}. Every
+     * member is listed, those without a Linux section too, so the script can say why it leaves one out.
+     */
+    private static void writeShScript(SuiteConfig s, List<Resolved> members, Path outDir, String installUrl) throws IOException {
+        StringBuilder b = new StringBuilder();
+        for (Resolved r : members) {
+            b.append("    vi_member ").append(LinuxTarget.shQuote(r.config.id))
+                    .append(' ').append(LinuxTarget.shQuote(r.config.name))
+                    .append(' ').append(LinuxTarget.shQuote(LinuxTarget.manifestUrl(r.manifestUrl)))
+                    .append(' ').append(LinuxTarget.shQuote(r.version == null ? "-" : r.version))
+                    .append(' ').append(r.optional() ? 1 : 0)
+                    .append(' ').append(r.linux() ? 1 : 0)
+                    .append(' ').append(LinuxTarget.shQuote(r.linux() ? LinuxTarget.registryDir(r.config.linux) : "-")).append('\n');
+        }
+        Files.createDirectories(outDir);
+        String script = Templates.render("suite/install.sh", Map.of(
+                "NAME", s.name.replaceAll("[\\r\\n]", " "),
+                "SUITE_SH", "VI_SUITE=" + LinuxTarget.shQuote(s.name),
+                "INSTALL_URL", installUrl,
+                "IDS", String.join(", ", members.stream().filter(Resolved::linux).map(r -> r.config.id).toList()),
+                "MEMBERS_SH", b.toString().stripTrailing()));
+        InstallerGenerator.writeAscii(outDir.resolve("install.sh"), script);
+    }
+
     private static String exampleIds(List<Resolved> members) {
         return members.size() > 1 ? members.get(0).config.id + "," + members.get(1).config.id : members.get(0).config.id;
     }
@@ -258,7 +328,7 @@ public final class SuiteGenerator {
 
     /** Copies the member's first binary icon as the page shows it; null when it has none. */
     private static String copyIcon(Resolved r, Path img) throws IOException {
-        for (BinaryConfig b : r.config.windows.binaries == null ? List.<BinaryConfig>of() : r.config.windows.binaries) {
+        for (BinaryConfig b : r.binaries()) {
             if (b == null || InstallerConfig.blank(b.icon)) continue;
             Path p = Path.of(b.icon);
             if (!p.isAbsolute()) p = r.configDir.resolve(p);
@@ -398,8 +468,17 @@ public final class SuiteGenerator {
     }
 
     /** Called before anything is written, like {@link #sections}. */
-    private static void checkLinux(SuiteConfig.Download d) {
+    private static void checkLinux(SuiteConfig.Download d, List<Resolved> lin) {
         if (d == null) return;
+        if (!lin.isEmpty()) {
+            // with an install line for Linux there is nothing to download by hand; what a computer needs still applies
+            if (!InstallerConfig.blank(d.url) || !InstallerConfig.blank(d.label) || !InstallerConfig.blank(d.text)
+                    || d.steps != null && !d.steps.isEmpty())
+                throw new InstallerException("'site.linux' offers downloads for a suite without a Linux installer, but "
+                        + and(lin.stream().map(r -> r.config.id).toList()) + (lin.size() == 1 ? " has" : " have")
+                        + " a 'linux' section, so the page shows the install line; keep only site.linux.requirements");
+            return;
+        }
         if (InstallerConfig.blank(d.url) || !d.url.matches("https://[^\\s\"'<>]+"))
             throw new InstallerException("'site.linux' needs a 'url': the https:// address of the builds");
         if (d.steps != null && d.steps.stream().anyMatch(InstallerConfig::blank))
@@ -420,6 +499,92 @@ public final class SuiteGenerator {
         b.append("</p>\n");
         if (!InstallerConfig.blank(d.requirements)) b.append("        <p class=\"hint\">").append(prose(d.requirements)).append("</p>\n");
         return b.append("        </div>").toString();
+    }
+
+    /** The hero's Linux panel when the members have a Linux installer: the line to paste into a terminal. */
+    private static String linuxInstallHero(String shUrl, SuiteConfig.Download d) {
+        StringBuilder b = new StringBuilder("        <div class=\"platform\" id=\"get-linux\">\n")
+                .append("        <p class=\"install-label\"><strong>Linux:</strong> paste this into a terminal and press <kbd>Enter</kbd></p>\n")
+                .append("        <div class=\"cmd\"><code id=\"install-command-linux\">").append(html("curl -fsSL " + shUrl + " | sh"))
+                .append("</code><button class=\"copy\" type=\"button\" data-copy=\"install-command-linux\">Copy</button></div>\n")
+                .append("        <p class=\"hint\">No <code>sudo</code>: everything goes under <code>~/.local</code>, for your user."
+                        + " Running the same line again updates everything.</p>\n")
+                .append("        <ul class=\"facts\">\n          <li>No root</li>\n          <li>Your user only</li>\n"
+                        + "          <li>Every download checked by SHA-256</li>\n          <li>Uninstall with one command</li>\n        </ul>\n");
+        if (d != null && !InstallerConfig.blank(d.requirements)) b.append("        <p class=\"hint\">").append(prose(d.requirements)).append("</p>\n");
+        return b.append("        </div>").toString();
+    }
+
+    /** What the Linux line changes, how to choose and how to undo it, as one of the install details. */
+    private static String linuxInstallDetails(String shUrl, List<Resolved> members, List<Resolved> lin) {
+        Set<String> parents = new LinkedHashSet<>();
+        boolean menu = false, desktop = false;
+        List<String> onPath = new ArrayList<>(), opens = new ArrayList<>();
+        for (Resolved r : lin) {
+            String dir = LinuxTarget.displayPath(LinuxTarget.installDir(r.config, r.config.linux));
+            parents.add(dir.contains("/") ? dir.substring(0, dir.lastIndexOf('/')) : dir);
+            boolean associates = false;
+            for (BinaryConfig b : r.config.linux.binaries == null ? List.<BinaryConfig>of() : r.config.linux.binaries) {
+                if (b == null) continue;
+                if (b.shortcuts != null) {
+                    menu |= Boolean.TRUE.equals(b.shortcuts.startMenu);
+                    desktop |= b.shortcuts.desktop == null || b.shortcuts.desktop;
+                }
+                if (Boolean.TRUE.equals(b.addToPath)) {
+                    String file = InstallerConfig.blank(b.file) ? Path.of(b.source == null ? "" : b.source).getFileName().toString() : b.file;
+                    String cmd = InstallerConfig.blank(b.name) ? file.replaceFirst("\\.[^.]*$", "") : b.name;
+                    if (!cmd.isEmpty()) onPath.add("<code>" + html(cmd) + "</code>");
+                }
+                associates |= b.fileAssociations != null && !b.fileAssociations.isEmpty();
+            }
+            if (associates) opens.add(html(r.config.name));
+        }
+        List<String> items = new ArrayList<>();
+        items.add(parents.size() == 1 ? "each application in its own folder under <code>" + html(parents.iterator().next()) + "</code>"
+                : "each application in its own folder");
+        if (menu || desktop) items.add(menu && desktop ? "entries in your applications menu, and launchers on your desktop if you have a Desktop folder"
+                : menu ? "entries in your applications menu" : "launchers on your desktop, if you have a Desktop folder");
+        if (!onPath.isEmpty()) items.add("links in <code>~/.local/bin</code>, so " + and(onPath) + (onPath.size() == 1 ? " runs" : " run")
+                + " from a terminal; a link is never put over a file that is not its own");
+        if (!opens.isEmpty()) items.add("file types " + and(opens) + (opens.size() == 1 ? " opens" : " open")
+                + ", under <em>Open With</em>; one becomes the default only where no program is");
+        List<String> windowsOnly = members.stream().filter(r -> !r.linux()).map(r -> html(r.config.name)).toList();
+        String example = lin.size() > 1 ? lin.get(0).config.id + "," + lin.get(1).config.id : lin.get(0).config.id;
+        String uninstall = "\"" + LinuxTarget.shellPath(LinuxTarget.installDir(lin.get(0).config, lin.get(0).config.linux)) + "/uninstall.sh\" --all";
+        StringBuilder b = new StringBuilder("        <details id=\"linux\">\n")
+                .append("          <summary>On Linux</summary>\n")
+                .append("          <p>The line runs one script, <a href=\"").append(attr(shUrl)).append("\">install.sh</a>. Like the Windows one, it")
+                .append(" runs each application's own installer once its SHA-256 matches the application's manifest, and that installer")
+                .append(" checks every download the same way. Nothing needs root, and everything is undone by uninstalling:</p>\n          <ul>\n");
+        for (String item : items) b.append("            <li>").append(item).append("</li>\n");
+        b.append("          </ul>\n");
+        if (!windowsOnly.isEmpty())
+            b.append("          <p>").append(and(windowsOnly)).append(windowsOnly.size() == 1 ? " has" : " have").append(" no Linux version yet.</p>\n");
+        b.append("          <p>Options go between the pipe and <code>sh</code>. Only some of the applications:</p>\n")
+                .append("          <div class=\"cmd plain\"><code id=\"linux-only\">").append(html("curl -fsSL " + shUrl + " | INSTALL_ONLY=" + example + " sh"))
+                .append("</code><button class=\"copy\" type=\"button\" data-copy=\"linux-only\">Copy</button></div>\n")
+                .append("          <p>Everything, the optional ones too:</p>\n")
+                .append("          <div class=\"cmd plain\"><code id=\"linux-everything\">").append(html("curl -fsSL " + shUrl + " | sh -s -- --install-everything"))
+                .append("</code><button class=\"copy\" type=\"button\" data-copy=\"linux-everything\">Copy</button></div>\n")
+                .append("          <p><code>INSTALL_NO_SHORTCUTS=1</code>, <code>INSTALL_NO_PATH=1</code> and <code>INSTALL_NO_ASSOCIATIONS=1</code>")
+                .append(" leave those out the same way.").append(optionalNoteLinux(lin, true))
+                .append(" Run the line again to update. To remove everything:</p>\n")
+                .append("          <div class=\"cmd plain\"><code id=\"linux-uninstall\">").append(html(uninstall))
+                .append("</code><button class=\"copy\" type=\"button\" data-copy=\"linux-uninstall\">Copy</button></div>\n")
+                .append("        </details>");
+        return b.toString();
+    }
+
+    /** Which members the Linux script leaves out unless asked for; empty when none. */
+    private static String optionalNoteLinux(List<Resolved> lin, boolean asHtml) {
+        List<Resolved> optional = lin.stream().filter(Resolved::optional).toList();
+        if (optional.isEmpty()) return "";
+        String names = and(optional.stream().map(r -> asHtml ? html(r.config.name) : r.config.name).toList());
+        String ids = and(optional.stream().map(r -> asHtml ? "<code>" + html(r.config.id) + "</code>" : "`" + r.config.id + "`").toList());
+        String only = asHtml ? "<code>INSTALL_ONLY</code>" : "`INSTALL_ONLY`";
+        String text = names + (optional.size() == 1 ? " is" : " are") + " optional: left out unless " + only + " names "
+                + ids + ", everything is asked for, or " + (optional.size() == 1 ? "it is" : "they are") + " installed already (then kept up to date).";
+        return asHtml ? " " + text : "\n\n" + text;
     }
 
     /** The Linux steps, as one of the install details; empty when there are none. */

@@ -14,4 +14,9 @@ public final class PlatformConfig {
     public List<Requirement> requires = new ArrayList<>();
     /** What the computer must have; checked before anything large is downloaded. */
     public SystemRequirements system;
+    /**
+     * Linux only: the processor the binaries are built for, as {@code uname -m} says it ({@code x86_64}, {@code aarch64}).
+     * Defaults to {@code x86_64} when the install has a native binary or an archive; jars and files run anywhere.
+     */
+    public String arch;
 }

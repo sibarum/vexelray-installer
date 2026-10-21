@@ -5,14 +5,17 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * What the computer must have. The installer checks it (with {@code diagnose.ps1}) before downloading
- * anything large and refuses when something is not met, unless told to skip the check. The GPU fields are met
- * together, by one GPU: its Vulkan device has the version and the extensions, and the DXGI adapter with the same
- * LUID has the Direct3D 12 feature level.
+ * What the computer must have. The installer checks it before downloading anything large and refuses when something is
+ * not met, unless told to skip the check. On Windows ({@code diagnose.ps1}) the GPU fields are met together, by one GPU:
+ * its Vulkan device has the version and the extensions, and the DXGI adapter with the same LUID has the Direct3D 12
+ * feature level. On Linux they are read from {@code vulkaninfo}, and the same Vulkan device must have the version and
+ * the extensions. {@code windows} and {@code d3d12} are Windows only, {@code glibc} is Linux only.
  */
 public final class SystemRequirements {
     /** Oldest Windows version, as {@code 10.0.19041} (or just the build, {@code 19041}). */
     public String windows;
+    /** Oldest GNU C library, as {@code 2.31}: what a native image built on a newer system needs. Linux only. */
+    public String glibc;
     public Integer memoryMb;
     /** Free space on the drive of the install folder. */
     public Integer diskMb;
@@ -25,13 +28,16 @@ public final class SystemRequirements {
     static final Map<String, Integer> D3D12_LEVELS = Map.of("11_0", 0xb000, "11_1", 0xb100, "12_0", 0xc000, "12_1", 0xc100, "12_2", 0xc200);
 
     boolean isEmpty() {
-        return InstallerConfig.blank(windows) && memoryMb == null && diskMb == null && InstallerConfig.blank(vulkan)
-                && (vulkanExtensions == null || vulkanExtensions.isEmpty()) && InstallerConfig.blank(d3d12);
+        return InstallerConfig.blank(windows) && InstallerConfig.blank(glibc) && memoryMb == null && diskMb == null
+                && InstallerConfig.blank(vulkan) && (vulkanExtensions == null || vulkanExtensions.isEmpty())
+                && InstallerConfig.blank(d3d12);
     }
 
     void check() {
         if (!InstallerConfig.blank(windows) && !windows.trim().matches("\\d+(\\.\\d+){0,2}"))
             throw new InstallerException("system.windows is a Windows version such as 10.0.19041, not '" + windows + "'");
+        if (!InstallerConfig.blank(glibc) && !glibc.trim().matches("2\\.\\d+"))
+            throw new InstallerException("system.glibc is a glibc version such as 2.31, not '" + glibc + "'");
         if (memoryMb != null && memoryMb <= 0) throw new InstallerException("system.memoryMb must be positive");
         if (diskMb != null && diskMb <= 0) throw new InstallerException("system.diskMb must be positive");
         if (!InstallerConfig.blank(vulkan) && !vulkan.trim().matches("1\\.\\d+"))
@@ -53,6 +59,7 @@ public final class SystemRequirements {
     List<String> describe() {
         List<String> lines = new ArrayList<>();
         if (!InstallerConfig.blank(windows)) lines.add("Windows " + windowsVersion() + " or newer");
+        if (!InstallerConfig.blank(glibc)) lines.add("glibc " + glibc.trim() + " or newer (the C library of most distributions)");
         if (memoryMb != null) lines.add(memoryMb + " MB of memory");
         if (diskMb != null) lines.add(diskMb + " MB free on the drive it is installed to");
         List<String> gpu = new ArrayList<>();

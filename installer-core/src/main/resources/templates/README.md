@@ -4,7 +4,7 @@
 {{DESCRIPTION}}
 
 {{PLATFORM_SECTIONS}}
-macOS and Linux installers are planned; the manifest is already organised per platform.
+{{PLANNED}}; the manifest is already organised per platform.
 
 ## Versions
 

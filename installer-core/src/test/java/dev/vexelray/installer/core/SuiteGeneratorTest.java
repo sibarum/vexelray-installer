@@ -501,4 +501,70 @@ class SuiteGeneratorTest {
         InstallerException e = assertThrows(InstallerException.class, () -> site(s));
         assertTrue(e.getMessage().contains("explorer"), e.getMessage());
     }
+
+    /** The explorer member, with a Linux build as well; the editor stays Windows only. */
+    void explorerOnLinux() throws IOException {
+        Files.writeString(tmp.resolve("explorer.json"), """
+                {"id": "explorer", "name": "Explorer", "repo": "owner/explorer", "branch": "dev", "repoPath": "dist",
+                 "windows": {"binaries": [{"source": "x.exe"}]},
+                 "linux": {"binaries": [{"source": "x", "addToPath": true}]}}
+                """);
+    }
+
+    @Test
+    void linuxMembersGetAnInstallShOfTheirOwn() throws IOException {
+        explorerOnLinux();
+        String command = generate(suite());
+
+        assertEquals("irm https://raw.githubusercontent.com/owner/framework/main/docs/install/install.ps1 | iex", command);
+        String sh = Files.readString(out.resolve("install.sh"), StandardCharsets.UTF_8);
+        assertTrue(sh.startsWith("#!/bin/sh\n") && sh.chars().allMatch(ch -> ch < 0x80) && !sh.contains("\r"));
+        assertTrue(sh.contains("vi_member 'explorer' 'Explorer' 'https://raw.githubusercontent.com/owner/explorer/dev/dist/manifest.linux.txt' '-' 0 1"));
+        assertTrue(sh.contains("vi_member 'editor' 'Editor' "), "listed, so the script can say it has no Linux version");
+        assertTrue(sh.contains("' '-' 0 0 '-'"));
+        assertFalse(sh.matches("(?s).*\\{\\{[A-Z_]+}}.*"));
+
+        String readme = Files.readString(out.resolve("README.md"), StandardCharsets.UTF_8);
+        assertTrue(readme.indexOf("## Windows") < readme.indexOf("## Linux"));
+        assertTrue(readme.contains("curl -fsSL https://raw.githubusercontent.com/owner/framework/main/docs/install/install.sh | sh"));
+        assertTrue(readme.contains("Editor has no Linux version yet"));
+        assertTrue(readme.contains("`~/.local/opt/explorer`"));
+        assertTrue(readme.contains("A macOS installer is planned."));
+    }
+
+    @Test
+    void withoutLinuxMembersThereIsNoInstallSh() throws IOException {
+        generate(suite());
+        assertFalse(Files.exists(out.resolve("install.sh")));
+        assertFalse(Files.readString(out.resolve("README.md"), StandardCharsets.UTF_8).contains("## Linux"));
+    }
+
+    @Test
+    void theSiteShowsTheLinuxInstallLine() throws IOException {
+        explorerOnLinux();
+        SuiteConfig s = siteSuite();
+        s.site.linux = new SuiteConfig.Download();
+        s.site.linux.requirements = "Needs X11 & Vulkan.";
+        site(s);
+
+        assertTrue(Files.exists(out.resolve("install.sh")));
+        String page = Files.readString(out.resolve("index.html"), StandardCharsets.UTF_8);
+        assertFalse(page.contains("{{"));
+        assertTrue(page.contains("id=\"platforms\""));
+        assertTrue(page.contains("<code id=\"install-command-linux\">curl -fsSL https://owner.github.io/install.sh | sh</code>"));
+        assertTrue(page.contains("Needs X11 &amp; Vulkan."));
+        assertTrue(page.contains("<details id=\"linux\">"));
+        assertTrue(page.contains("Editor has no Linux version yet."));
+        assertTrue(page.contains("\"$HOME/.local/opt/explorer/uninstall.sh\" --all"));
+        assertFalse(page.contains("Download for Linux"));
+    }
+
+    @Test
+    void aLinuxDownloadIsRefusedWhenMembersInstallOnLinux() throws IOException {
+        explorerOnLinux();
+        SuiteConfig s = siteSuite();
+        s.site.linux = linux();
+        assertTrue(assertThrows(InstallerException.class, () -> site(s)).getMessage().contains("explorer"));
+        assertFalse(Files.exists(out.resolve("index.html")), "nothing written");
+    }
 }
