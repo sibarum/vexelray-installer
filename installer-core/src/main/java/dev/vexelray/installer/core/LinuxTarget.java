@@ -57,17 +57,20 @@ public final class LinuxTarget implements PlatformTarget {
         return n;
     }
 
-    /** {@code CONFIG_SH}: the same values as sh assignments, each quoted so the shell takes it literally. */
+    /**
+     * {@code CONFIG_SH}: the same values as sh assignments, each quoted so the shell takes it literally. Every script
+     * gets all of them and uses only some, so they are one group that shellcheck is told not to call unused.
+     */
     @Override
     public Map<String, String> scriptVars(InstallerConfig c, PlatformConfig p, String manifestUrl) {
         ObjectNode n = scriptConfig(c, p, manifestUrl);
-        StringBuilder b = new StringBuilder();
+        StringBuilder b = new StringBuilder("# shellcheck disable=SC2034\n{\n");
         for (String[] kv : new String[][] {{"VI_ID", "id"}, {"VI_NAME", "name"}, {"VI_PUBLISHER", "publisher"},
                 {"VI_DESCRIPTION", "description"}, {"VI_MANIFEST_URL", "manifestUrl"}, {"VI_REGISTRY_DIR", "registryDir"},
                 {"VI_ISSUES_URL", "issuesUrl"}}) {
             b.append(kv[0]).append('=').append(shQuote(n.path(kv[1]).asText(""))).append('\n');
         }
-        return Map.of("CONFIG_SH", b.toString().stripTrailing());
+        return Map.of("CONFIG_SH", b.append('}').toString());
     }
 
     /**

@@ -124,7 +124,7 @@ vi_main() {
             continue
         fi
         vi_t=$(awk -F'\t' '$1 == "tool" && $2 == "install.sh"' "$vi_mf")
-        IFS="$vi_tab" read -r vi_k vi_tn vi_tsha vi_turl <<EOF
+        IFS="$vi_tab" read -r _ _ vi_tsha vi_turl <<EOF
 $vi_t
 EOF
         if [ -z "$vi_t" ] || ! vi_get "$vi_turl" "$vi_tmp/$vi_id.sh"; then
@@ -139,9 +139,9 @@ EOF
         fi
         # a pinned version is installed even over itself: a snapshot is rebuilt under the same version
         if [ "$vi_pin" != - ]; then
-            INSTALL_VERSION=$vi_pin INSTALL_DIR= INSTALL_FORCE=1 sh "$vi_tmp/$vi_id.sh" < /dev/null
+            INSTALL_VERSION=$vi_pin INSTALL_DIR='' INSTALL_FORCE=1 sh "$vi_tmp/$vi_id.sh" < /dev/null
         else
-            INSTALL_VERSION= INSTALL_DIR= sh "$vi_tmp/$vi_id.sh" < /dev/null
+            INSTALL_VERSION='' INSTALL_DIR='' sh "$vi_tmp/$vi_id.sh" < /dev/null
         fi
         if [ $? = 0 ]; then vi_done="$vi_done${vi_done:+, }$vi_name"; else vi_failed="$vi_failed${vi_failed:+, }$vi_name"; fi
     done < "$vi_tmp/members"

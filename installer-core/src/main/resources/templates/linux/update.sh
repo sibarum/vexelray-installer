@@ -96,12 +96,12 @@ vi_main() {
 
     vi_t=$(awk -F'\t' '$1 == "tool" && $2 == "install.sh"' "$vi_mf")
     [ -n "$vi_t" ] || vi_die "The manifest names no install.sh."
-    IFS="$vi_tab" read -r vi_k vi_n vi_tsha vi_turl <<EOF
+    IFS="$vi_tab" read -r _ _ vi_tsha vi_turl <<EOF
 $vi_t
 EOF
     vi_get "$vi_turl" "$vi_tmp/install.sh" || vi_die "Could not download $vi_turl."
     [ "$(vi_sha "$vi_tmp/install.sh")" = "$vi_tsha" ] || vi_die "install.sh does not match the SHA-256 in the manifest; nothing was changed."
-    INSTALL_VERSION= INSTALL_FORCE= INSTALL_DIR="$vi_dir" sh "$vi_tmp/install.sh"
+    INSTALL_VERSION='' INSTALL_FORCE='' INSTALL_DIR="$vi_dir" sh "$vi_tmp/install.sh"
 }
 
 vi_main "$@"

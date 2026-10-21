@@ -339,7 +339,7 @@ vi_check_system() {
     vi_rec system "$1" > "$VI_TMP/system"
     vi_vkv=
     vi_exts=
-    while IFS="$vi_tab" read -r vi_k vi_v vi_key vi_val; do
+    while IFS="$vi_tab" read -r vi_k _ vi_key vi_val; do
         VI_CHECKED=1
         case $vi_key in
             memoryMb)
@@ -496,7 +496,7 @@ vi_main() {
     fi
 
     vi_rec needs "$want" > "$VI_TMP/needs"
-    while IFS="$vi_tab" read -r vi_k vi_v rid rmin; do
+    while IFS="$vi_tab" read -r vi_k _ rid rmin; do
         rver=$(vi_state "$VI_REG/$rid.state" version)
         [ -n "$rver" ] || vi_die "$VI_NAME needs '$rid' to be installed first. Install it, then run this again."
         if [ "$rmin" != - ] && [ "$(vi_cmp "$rver" "$rmin")" -lt 0 ]; then
@@ -568,7 +568,7 @@ EOF
     done
     vi_rec bin "$want" > "$VI_TMP/bins"
     vi_i=0
-    while IFS="$vi_tab" read -r vi_k vi_v name kind bver sha size onpath file url rel; do
+    while IFS="$vi_tab" read -r vi_k _ name kind bver sha size onpath file url rel; do
         vi_i=$((vi_i + 1))
         target=$(vi_join "$dir" "$rel")
         if [ "$kind" = archive ]; then
@@ -593,7 +593,7 @@ EOF
         fi
     done < "$VI_TMP/bins"
     { vi_rec icon "$want"; vi_rec typeicon "$want"; } > "$VI_TMP/icons"
-    while IFS="$vi_tab" read -r vi_k vi_v name isha ipx ifile iurl irel; do
+    while IFS="$vi_tab" read -r vi_k _ name isha ipx ifile iurl irel; do
         itarget=$(vi_join "$dir" "$irel")
         if [ -f "$itarget" ] && [ "$(vi_sha "$itarget")" = "$isha" ]; then continue; fi
         vi_fetch "$iurl" "$isha" - "$ifile"
@@ -618,12 +618,12 @@ EOF
     vi_st option noShortcuts "$no_sc"
     vi_st option noPath "$no_path"
     vi_st option noAssociations "$no_assoc"
-    vi_rec needs "$want" | while IFS="$vi_tab" read -r vi_k vi_v rid rmin; do vi_st requires "$rid"; done
+    vi_rec needs "$want" | while IFS="$vi_tab" read -r vi_k _ rid rmin; do vi_st requires "$rid"; done
 
     vi_tx_begin
     vi_mkdirs "$dir"
     vi_i=0
-    while IFS="$vi_tab" read -r vi_k vi_v name kind bver sha size onpath file url rel; do
+    while IFS="$vi_tab" read -r vi_k _ name kind bver sha size onpath file url rel; do
         vi_i=$((vi_i + 1))
         target=$(vi_join "$dir" "$rel")
         src=$(awk -F'\t' -v n="$name" '$1 == "bin" && $2 == n { print $3; exit }' "$got")
@@ -640,7 +640,7 @@ EOF
             fi
             vi_st archive "$name" "$sha" "$bver" "$target"
             vi_rec expose "$want" | awk -F'\t' -v n="$name" '$3 == n' > "$VI_TMP/exp"
-            while IFS="$vi_tab" read -r vi_k vi_v vi_n cmd erel; do vi_st command "$cmd" native "$bver" "$target/$erel"; done < "$VI_TMP/exp"
+            while IFS="$vi_tab" read -r vi_k _ vi_n cmd erel; do vi_st command "$cmd" native "$bver" "$target/$erel"; done < "$VI_TMP/exp"
             continue
         fi
         case $kind in native) mode=755 ;; *) mode=644 ;; esac
@@ -658,7 +658,7 @@ EOF
         fi
         [ "$kind" = file ] || vi_st command "$name" "$kind" "$bver" "$run"
     done < "$VI_TMP/bins"
-    while IFS="$vi_tab" read -r vi_k vi_v name isha ipx ifile iurl irel; do
+    while IFS="$vi_tab" read -r vi_k _ name isha ipx ifile iurl irel; do
         itarget=$(vi_join "$dir" "$irel")
         src=$(awk -F'\t' -v r="$irel" '$1 == "icon" && $2 == r { print $3; exit }' "$got")
         [ -n "$src" ] && vi_put "$src" "$itarget" 644
@@ -682,7 +682,7 @@ EOF
     [ "$desktop_dir" = "$HOME" ] && desktop_dir=
     vi_rec assoc "$want" > "$VI_TMP/assocs"
     : > "$VI_TMP/defaults"
-    while IFS="$vi_tab" read -r vi_k vi_v name kind bver sha size onpath file url rel; do
+    while IFS="$vi_tab" read -r vi_k _ name kind bver sha size onpath file url rel; do
         [ "$kind" = native ] || [ "$kind" = jar ] || continue
         sc=$(vi_rec shortcut "$want" | awk -F'\t' -v n="$name" '$3 == n')
         mimes=
@@ -693,7 +693,7 @@ EOF
         icon=$(awk -F'\t' -v n="$name" '$1 == "file" && $2 == "icon" && $3 == n { print $6; exit }' "$VI_NEWSTATE")
         id=$(vi_desktop_id "$name")
         if [ -n "$sc" ]; then
-            IFS="$vi_tab" read -r vi_k vi_v vi_n sdesk smenu sgui label <<EOF
+            IFS="$vi_tab" read -r vi_k _ vi_n sdesk smenu sgui label <<EOF
 $sc
 EOF
         else sdesk=0; smenu=0; sgui=1; label=$name; fi
@@ -717,7 +717,7 @@ EOF
         # a file type becomes ours by default only when no program is its default yet
         if [ -n "$mimes" ]; then
             awk -F'\t' -v n="$name" '$3 == n' "$VI_TMP/assocs" > "$VI_TMP/mine"
-            while IFS="$vi_tab" read -r vi_k vi_v vi_n ext mime own ficon desc; do
+            while IFS="$vi_tab" read -r vi_k _ vi_n ext mime own ficon desc; do
                 isdef=0
                 if command -v xdg-mime >/dev/null 2>&1; then
                     cur=$(xdg-mime query default "$mime" 2>/dev/null)
@@ -735,7 +735,7 @@ EOF
         {
             printf '<?xml version="1.0" encoding="UTF-8"?>\n'
             printf '<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">\n'
-            while IFS="$vi_tab" read -r vi_k vi_v vi_n ext mime own ficon desc; do
+            while IFS="$vi_tab" read -r vi_k _ vi_n ext mime own ficon desc; do
                 printf '  <mime-type type="%s">\n' "$(vi_xml "$mime")"
                 [ "$own" = 1 ] && printf '    <comment>%s</comment>\n' "$(vi_xml "$desc")"
                 # below the usual weight, so an extension another type already has keeps it
@@ -746,7 +746,7 @@ EOF
         } > "$VI_TMP/mime.xml"
         vi_put "$VI_TMP/mime.xml" "$xml" 644
         vi_st file mime "$VI_ID" "$want" "$(vi_sha "$xml")" "$xml"
-        while IFS="$vi_tab" read -r vi_k vi_v vi_n ext mime own ficon desc; do
+        while IFS="$vi_tab" read -r vi_k _ vi_n ext mime own ficon desc; do
             [ "$own" = 1 ] || continue
             if [ "$ficon" != - ]; then
                 ipath=$(awk -F'\t' -v n="$vi_n" -v f="$ficon" '$1 == "typeicon" && $3 == n && $6 == f { print $5 "\t" $8; exit }' "$VI_TMP/icons")
@@ -765,7 +765,7 @@ EOF
     # 5. commands on PATH: links in ~/.local/bin, never over a file that is not one of ours
     bindir="$HOME/.local/bin"
     if [ "$no_path" = 0 ]; then
-        while IFS="$vi_tab" read -r vi_k vi_v name kind bver sha size onpath file url rel; do
+        while IFS="$vi_tab" read -r vi_k _ name kind bver sha size onpath file url rel; do
             [ "$onpath" = 1 ] || continue
             run=$(awk -F'\t' -v n="$name" '$1 == "command" && $2 == n { print $5; exit }' "$VI_NEWSTATE")
             [ -n "$run" ] || continue

@@ -54,7 +54,7 @@ reg="$XDG_DATA_HOME/vexelray-installer/installs"
 echo "== generate"
 gen demo.json 1.0.0 out
 for f in out/install.sh out/uninstall.sh out/update.sh; do check "$run -n $f" "$f parses"; done
-command -v shellcheck >/dev/null 2>&1 && check "shellcheck -s sh -S error out/*.sh" "shellcheck finds no errors"
+command -v shellcheck >/dev/null 2>&1 && check "shellcheck -s sh -S warning out/*.sh" "shellcheck finds no warnings"
 
 echo "== install"
 check "$run out/install.sh > install.log 2>&1" "installs"
@@ -128,6 +128,7 @@ cat > suite.json <<EOF
 EOF
 java -jar "$cli" --suite suite.json --out suite --base-url "$url/suite" > /dev/null
 check "$run -n suite/install.sh" "the suite's install.sh parses"
+command -v shellcheck >/dev/null 2>&1 && check "shellcheck -s sh -S warning suite/install.sh" "shellcheck finds no warnings in it"
 check "$run suite/install.sh > suite.log 2>&1 && grep -q 'Two is optional and not installed' suite.log" "an optional member is left out"
 check "INSTALL_ONLY=two,win $run suite/install.sh > suite2.log 2>&1 && [ \"\$($HOME/.local/opt/two/two)\" = two ]" "INSTALL_ONLY installs it"
 check "grep -q 'Win has no Linux version yet' suite2.log" "a Windows-only member is reported"
