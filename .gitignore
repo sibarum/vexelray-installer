@@ -1,4 +1,5 @@
 target/
+target-linux/
 /installer.json
 /dist/
 /build/
