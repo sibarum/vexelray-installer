@@ -119,6 +119,7 @@ public final class SuiteGenerator {
             throw new InstallerException("'site.url' must be an https:// address, not '" + site.url + "'");
         String sections = sections(site);
         String heroAction = heroAction(site);
+        checkLinux(site.linux);
         Path logo = logo(site, baseDir);
         String footer = footer(s);
         List<Resolved> members = resolve(s, baseDir);
@@ -179,6 +180,11 @@ public final class SuiteGenerator {
         vars.put("SOURCE", InstallerConfig.blank(s.repo) ? "" : "<p>The script, the manifests and the releases are all in one public repository, <a href=\""
                 + attr("https://github.com/" + s.repo) + "\">" + html(s.repo) + "</a>.</p>");
         vars.put("FEEDBACK", feedback(site));
+        vars.put("PLATFORM_TABS", site.linux == null ? "" : "        <div class=\"platforms\" id=\"platforms\" role=\"tablist\" aria-label=\"Your system\" hidden>"
+                + "<button type=\"button\" role=\"tab\" data-platform=\"windows\" aria-controls=\"get-windows\">Windows</button>"
+                + "<button type=\"button\" role=\"tab\" data-platform=\"linux\" aria-controls=\"get-linux\">Linux</button></div>");
+        vars.put("LINUX_HERO", linuxHero(site.linux));
+        vars.put("LINUX_DETAILS", linuxDetails(site.linux));
         vars.put("FOOTER", footer);
         InstallerGenerator.writeUtf8(outDir.resolve("index.html"), Templates.render("suite/index.html", vars));
         // Served as is: no Jekyll, which would otherwise skip files and folders it has opinions about.
@@ -389,6 +395,44 @@ public final class SuiteGenerator {
         if (InstallerConfig.blank(a.label) || InstallerConfig.blank(a.url))
             throw new InstallerException("'site.heroAction' needs a 'label' and a 'url'");
         return "<a class=\"button ghost\" href=\"" + attr(a.url) + "\">" + html(a.label) + "</a>";
+    }
+
+    /** Called before anything is written, like {@link #sections}. */
+    private static void checkLinux(SuiteConfig.Download d) {
+        if (d == null) return;
+        if (InstallerConfig.blank(d.url) || !d.url.matches("https://[^\\s\"'<>]+"))
+            throw new InstallerException("'site.linux' needs a 'url': the https:// address of the builds");
+        if (d.steps != null && d.steps.stream().anyMatch(InstallerConfig::blank))
+            throw new InstallerException("every 'site.linux.steps' entry needs some text");
+    }
+
+    /** The hero's Linux panel, beside the Windows install line; empty when the site offers no Linux builds. */
+    private static String linuxHero(SuiteConfig.Download d) {
+        if (d == null) return "";
+        String label = InstallerConfig.blank(d.label) ? "Download" : d.label.trim();
+        StringBuilder b = new StringBuilder("        <div class=\"platform\" id=\"get-linux\">\n")
+                .append("        <p class=\"install-label\"><strong>Linux:</strong>");
+        if (!InstallerConfig.blank(d.text)) b.append(' ').append(prose(d.text));
+        b.append("</p>\n        <p class=\"downloads\"><a class=\"button\" href=\"").append(attr(d.url)).append("\">")
+                .append(html(label)).append("</a>");
+        if (d.steps != null && !d.steps.isEmpty())
+            b.append("<a class=\"button ghost\" href=\"#linux\">How to run them</a>");
+        b.append("</p>\n");
+        if (!InstallerConfig.blank(d.requirements)) b.append("        <p class=\"hint\">").append(prose(d.requirements)).append("</p>\n");
+        return b.append("        </div>").toString();
+    }
+
+    /** The Linux steps, as one of the install details; empty when there are none. */
+    private static String linuxDetails(SuiteConfig.Download d) {
+        if (d == null || d.steps == null || d.steps.isEmpty()) return "";
+        StringBuilder b = new StringBuilder("        <details id=\"linux\">\n")
+                .append("          <summary>Run them on Linux</summary>\n")
+                .append("          <p>Linux has no install line yet. The builds are on <a href=\"").append(attr(d.url))
+                .append("\">their download page</a>; from there:</p>\n          <ol>\n");
+        for (String step : d.steps) b.append("            <li>").append(prose(step)).append("</li>\n");
+        b.append("          </ol>\n");
+        if (!InstallerConfig.blank(d.requirements)) b.append("          <p>").append(prose(d.requirements)).append("</p>\n");
+        return b.append("        </details>").toString();
     }
 
     /** The logo's file, checked; null when the site names none. */

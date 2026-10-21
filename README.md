@@ -175,6 +175,11 @@ so the command is short and the first thing people find:
     "links": [ { "label": "Docs", "url": "https://owner.github.io/docs/" } ],
     "footerLinks": [ { "label": "Licenses", "url": "https://owner.github.io/licenses.html" } ],
     "notice": "Small print at the foot of the page, such as trademark notices.",
+    "linux": {
+      "url": "https://github.com/owner/repo/releases", "label": "Download for Linux",
+      "text": "what there is to download.", "requirements": "Needs X11 and a Vulkan driver.",
+      "steps": [ "Download the build.", "Run `chmod +x app`, then `./app`." ]
+    },
     "sections": [
       {
         "id": "build", "title": "Build your own", "nav": "Developers",
@@ -203,7 +208,10 @@ folders, shortcuts, the commands added to `PATH` and the applications that regis
 `site.sections` goes between the members and those details, as a title, a paragraph, a row of cards (a card's `url`
 is optional, and so is its `stat`, a figure set large above its title) and an optional button. The header links only the members and `site.links`, never a section. Text in the config
 may use `` `code` ``; everything else is escaped. `site.footerLinks` go in the footer after the source link, and
-`site.notice` is set in small print under them. The members' manifests stay where their own runs published them,
+`site.notice` is set in small print under them. `site.linux` offers Linux builds for download before Linux has an
+installer: a switch above the command, starting on the visitor's own system, chooses between the install line and a
+button to `site.linux.url` with its `text` and `requirements`, and its `steps` become one more of the details (without
+script there is no switch, and both are shown). The members' manifests stay where their own runs published them,
 so installs and updaters are the same whichever command installed them. Publish the folder from its repo's root with
 GitHub Pages (**Settings > Pages > Deploy from a branch**).
 

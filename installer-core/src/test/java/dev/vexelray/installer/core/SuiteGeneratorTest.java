@@ -317,6 +317,56 @@ class SuiteGeneratorTest {
         assertThrows(InstallerException.class, () -> site(http));
     }
 
+    SuiteConfig.Download linux() {
+        SuiteConfig.Download d = new SuiteConfig.Download();
+        d.url = "https://github.com/owner/dist/releases";
+        d.label = "Download for Linux";
+        d.text = "builds for `x86_64`.";
+        d.requirements = "Needs X11 & Vulkan.";
+        d.steps.add("Download the build.");
+        d.steps.add("Run `chmod +x editor`.");
+        return d;
+    }
+
+    @Test
+    void linuxBuildsSitBesideTheInstallLineBehindASwitch() throws IOException {
+        SuiteConfig s = siteSuite();
+        s.site.linux = linux();
+        site(s);
+
+        String page = Files.readString(out.resolve("index.html"), StandardCharsets.UTF_8);
+        assertFalse(page.contains("{{"), "every token filled");
+        assertTrue(page.contains("<div class=\"platforms\" id=\"platforms\" role=\"tablist\""));
+        int windows = page.indexOf("id=\"get-windows\""), linux = page.indexOf("id=\"get-linux\"");
+        assertTrue(windows >= 0 && windows < linux, "Windows first, as it reads without script");
+        assertTrue(page.contains("<strong>Linux:</strong> builds for <code>x86_64</code>.</p>"));
+        assertTrue(page.contains("<a class=\"button\" href=\"https://github.com/owner/dist/releases\">Download for Linux</a>"));
+        assertTrue(page.contains("<a class=\"button ghost\" href=\"#linux\">How to run them</a>"));
+        assertTrue(page.contains("Needs X11 &amp; Vulkan."));
+        int details = page.indexOf("<details id=\"linux\">");
+        assertTrue(details > page.indexOf("id=\"run-dialog\"") && details < page.indexOf("id=\"feedback\""), "among the details");
+        assertTrue(page.contains("<li>Run <code>chmod +x editor</code>.</li>"));
+    }
+
+    @Test
+    void withoutLinuxThereIsNoSwitch() throws IOException {
+        site(siteSuite());
+        String page = Files.readString(out.resolve("index.html"), StandardCharsets.UTF_8);
+        assertFalse(page.contains("id=\"platforms\""));
+        assertFalse(page.contains("id=\"get-linux\""));
+        assertFalse(page.contains("<details id=\"linux\">"));
+        assertTrue(page.contains("id=\"get-windows\""));
+    }
+
+    @Test
+    void linuxNeedsAnHttpsAddress() throws IOException {
+        SuiteConfig s = siteSuite();
+        s.site.linux = linux();
+        s.site.linux.url = "http://example.com";
+        assertThrows(InstallerException.class, () -> site(s));
+        assertFalse(Files.exists(out.resolve("install.ps1")), "nothing written");
+    }
+
     SuiteConfig.Section buildSection() {
         SuiteConfig.Section sec = new SuiteConfig.Section();
         sec.id = "build";

@@ -81,6 +81,25 @@ public final class SuiteConfig {
         public String notice;
         /** Sections of the suite's own between the members and the install details, in order; each is in the header too. */
         public List<Section> sections = new ArrayList<>();
+        /** Optional: Linux builds offered as downloads, before Linux has an installer of its own. */
+        public Download linux;
+    }
+
+    /**
+     * A platform the page offers as a download rather than an install line: a button to where the builds are, what a
+     * computer needs, and the steps to run them once downloaded.
+     */
+    public static final class Download {
+        /** Where the builds are, such as the releases page; an https:// address. */
+        public String url;
+        /** The button's label; {@code Download} when not set. */
+        public String label;
+        /** One line beside the platform's name, saying what there is to download. */
+        public String text;
+        /** What a computer needs to run the builds, said under the button. */
+        public String requirements;
+        /** The steps from download to a running application, in order, under the install details. */
+        public List<String> steps = new ArrayList<>();
     }
 
     public static final class Link {
