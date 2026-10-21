@@ -3,6 +3,8 @@
 Turns a native-image executable and/or a compiled uberjar into a one-line installer served
 from a public GitHub repo.
 
+Part of the [VexelRay](https://sibarum.github.io/) stack. Building an application on it? Start at the [developer guide](https://sibarum.github.io/vexelray-framework/developers/).
+
 ```
 your build ──► installer:generate ──► install.ps1  uninstall.ps1  update.ps1  diagnose.ps1  manager.ps1     (windows)
                                   ├─► install.sh  uninstall.sh  update.sh  manifest.linux.txt            (linux)
