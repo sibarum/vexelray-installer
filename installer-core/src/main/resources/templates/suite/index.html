@@ -57,6 +57,7 @@
   .cmd code { flex: 1; min-width: 0; padding: 16px 18px; color: var(--text); font: 0.98rem/1.5 var(--mono); overflow-x: auto; white-space: pre; background: none; }
   .cmd code::before { content: "PS> "; color: var(--dim); }
   .cmd.plain code::before { content: none; }
+  #install-command-linux::before { content: "$ "; }
   .copy { appearance: none; border: none; background: var(--text); color: var(--bg); font: 800 0.9rem system-ui, sans-serif; padding: 0 22px; cursor: pointer; min-width: 92px; }
   .copy:hover { background: var(--cyan); }
   .hint { font-size: 0.88rem; color: var(--muted); margin: 12px 0 0; }
