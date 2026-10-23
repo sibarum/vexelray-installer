@@ -118,7 +118,9 @@ java -jar installer-core/target/installer-core-0.1.0-SNAPSHOT-cli.jar --config i
 
 `installer.json` has the same fields as the plugin configuration; see
 [installer.example.json](installer.example.json). Relative `source` paths resolve against the
-config file.
+config file. `--platform linux` (or `windows`, or both, comma-separated) generates only those sections, so the other
+platforms' binaries need not exist: for trying one platform's installer where only its build is at hand. It cannot be
+combined with `--publish`, since a release has every platform.
 
 ## Suites: one command for several applications
 

@@ -190,6 +190,29 @@ class LinuxTargetTest {
     }
 
     @Test
+    void onlyThePlatformsAskedForNeedTheirArtifacts() throws IOException {
+        InstallerConfig c = config();
+        c.windows = new PlatformConfig();
+        BinaryConfig exe = new BinaryConfig();
+        exe.source = "src/missing.exe";
+        c.windows.binaries.add(exe);
+        assertThrows(InstallerException.class, () -> run(c, "1.0.0"), "every platform by default");
+
+        GenerationRequest r = new GenerationRequest();
+        r.config = c;
+        r.version = "1.0.0";
+        r.outDir = out;
+        r.assetsDir = assets;
+        r.baseDir = tmp;
+        new InstallerGenerator(Main.targets("linux")).generate(r);
+        assertTrue(Files.exists(out.resolve("install.sh")));
+        assertFalse(Files.exists(out.resolve("install.ps1")));
+        assertFalse(Json.tree(read("manifest.json")).path("versions").get(0).path("platforms").has("windows"));
+        assertEquals(List.of("linux", "windows"), Main.targets("linux, windows,linux").stream().map(PlatformTarget::key).toList());
+        assertThrows(InstallerException.class, () -> Main.targets("macos"));
+    }
+
+    @Test
     void refusesWhatLinuxCannotInstall() throws IOException {
         Files.writeString(src.resolve("rt.zip"), "zip");
         InstallerConfig zip = config();

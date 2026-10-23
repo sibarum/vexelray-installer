@@ -3,6 +3,8 @@ package dev.vexelray.installer.core;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Command line front end, for projects that don't use Maven (and for tests/smoke.ps1).
@@ -10,6 +12,7 @@ import java.nio.file.Path;
  * <pre>
  * java -jar installer-core-*-cli.jar --config installer.json [--version 1.2.0] [--out dist]
  *      [--assets build/release-assets] [--notes "..."] [--base-url URL] [--asset-base-url URL]
+ *      [--platform linux] (only these platforms' sections, comma-separated; the others' artifacts are not needed)
  *      [--publish]        (token from $GITHUB_TOKEN)
  *
  * java -jar installer-core-*-cli.jar --suite suite.json [--out dist] [--base-url URL]
@@ -31,7 +34,7 @@ public final class Main {
     static int run(String[] args) {
         String config = "installer.json", version = null, out = "dist", assets = "build/release-assets";
         String notes = "", baseUrl = null, assetBaseUrl = null;
-        String suite = null;
+        String suite = null, platforms = null;
         boolean publish = false, site = false;
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
@@ -43,12 +46,16 @@ public final class Main {
                 case "--notes" -> notes = value(args, ++i);
                 case "--base-url" -> baseUrl = value(args, ++i);
                 case "--asset-base-url" -> assetBaseUrl = value(args, ++i);
+                case "--platform" -> platforms = value(args, ++i);
                 case "--publish" -> publish = true;
                 case "--site" -> site = true;
                 default -> throw new InstallerException("unknown argument " + args[i]);
             }
         }
         if (site && suite == null) throw new InstallerException("--site needs --suite");
+        if (platforms != null && (suite != null || publish)) {
+            throw new InstallerException("--platform is for generating one application, and a release has every platform");
+        }
         if (site && baseUrl != null) throw new InstallerException("--site takes its address from the suite's site.url, not --base-url");
         if (suite != null) return suite(Path.of(suite).toAbsolutePath(), Path.of(out).toAbsolutePath(), baseUrl, site);
         Path configPath = Path.of(config).toAbsolutePath();
@@ -68,7 +75,7 @@ public final class Main {
         req.baseUrl = baseUrl;
         req.assetBaseUrl = assetBaseUrl;
 
-        GenerationResult res = new InstallerGenerator().generate(req);
+        GenerationResult res = new InstallerGenerator(targets(platforms)).generate(req);
         System.out.println("Generated " + cfg.name + " " + res.version() + " into " + req.outDir);
         System.out.println("  one-liner:  " + res.installCommand());
         if (publish) {
@@ -102,6 +109,20 @@ public final class Main {
         System.out.println("  one-liner:  " + command);
         System.out.println("  next:       commit the generated files in " + out + " to " + s.repo);
         return 0;
+    }
+
+    /** The targets named in {@code keys} ({@code linux}, {@code windows,linux}), or every one for {@code null}. */
+    static List<PlatformTarget> targets(String keys) {
+        List<PlatformTarget> all = InstallerGenerator.defaultTargets();
+        if (keys == null) return all;
+        List<PlatformTarget> chosen = new ArrayList<>();
+        for (String key : keys.split(",")) {
+            PlatformTarget t = all.stream().filter(p -> p.key().equals(key.trim())).findFirst()
+                    .orElseThrow(() -> new InstallerException("--platform " + key.trim() + ": not one of "
+                            + all.stream().map(PlatformTarget::key).toList()));
+            if (!chosen.contains(t)) chosen.add(t);
+        }
+        return chosen;
     }
 
     private static String value(String[] args, int i) {

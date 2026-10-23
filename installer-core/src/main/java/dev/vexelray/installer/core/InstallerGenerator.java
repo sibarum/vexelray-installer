@@ -45,7 +45,10 @@ public final class InstallerGenerator {
 
     private final List<PlatformTarget> targets;
 
-    public InstallerGenerator() { this(List.of(new WindowsTarget(), new LinuxTarget())); }
+    public InstallerGenerator() { this(defaultTargets()); }
+
+    /** Every platform this generator knows, in the order their sections appear. */
+    public static List<PlatformTarget> defaultTargets() { return List.of(new WindowsTarget(), new LinuxTarget()); }
 
     public InstallerGenerator(List<PlatformTarget> targets) { this.targets = List.copyOf(targets); }
 
