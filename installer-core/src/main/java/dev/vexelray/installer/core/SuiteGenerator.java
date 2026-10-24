@@ -163,7 +163,8 @@ public final class SuiteGenerator {
         List<Resolved> lin = members.stream().filter(Resolved::linux).toList();
         if (win.isEmpty()) throw new InstallerException("the landing page needs at least one member with a 'windows' section");
         checkLinux(site.linux, lin);
-        Path logo = logo(site, baseDir);
+        Path logo = logo(site.logo, "site.logo", baseDir);
+        Path heroLogo = logo(site.heroLogo, "site.heroLogo", baseDir);
         String footer = footer(s);
         String installUrl = site.url.replaceAll("/+$", "") + "/install.ps1";
         String shUrl = site.url.replaceAll("/+$", "") + "/install.sh";
@@ -180,6 +181,12 @@ public final class SuiteGenerator {
             Files.copy(logo, img.resolve(name), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             favicon = "<link rel=\"icon\" href=\"img/" + name + "\">";
             logoTag = "<img src=\"img/" + name + "\" alt=\"\">";
+        }
+        String heroLogoTag = "";
+        if (heroLogo != null) {
+            String name = "hero-logo." + heroLogo.getFileName().toString().replaceFirst(".*\\.", "").toLowerCase(Locale.ROOT);
+            Files.copy(heroLogo, img.resolve(name), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            heroLogoTag = "<img class=\"hero-logo\" src=\"img/" + name + "\" alt=\"\">";
         }
         for (Resolved r : members) {
             String icon = copyIcon(r, img);
@@ -203,6 +210,7 @@ public final class SuiteGenerator {
         vars.put("META_DESCRIPTION", attr(InstallerConfig.blank(site.tagline) ? description : site.tagline.trim()));
         vars.put("FAVICON", favicon);
         vars.put("LOGO", logoTag);
+        vars.put("HERO_LOGO", heroLogoTag);
         vars.put("HERO_ACTION", heroAction);
         vars.put("ACCENT", InstallerConfig.blank(site.accentColor) ? "#2563eb" : cssColor(site.accentColor));
         vars.put("NAV", nav(site, s.repo));
@@ -600,14 +608,14 @@ public final class SuiteGenerator {
         return b.append("        </details>").toString();
     }
 
-    /** The logo's file, checked; null when the site names none. */
-    private static Path logo(SuiteConfig.Site site, Path baseDir) {
-        if (InstallerConfig.blank(site.logo)) return null;
-        Path p = Path.of(site.logo);
+    /** A logo's file, checked; null when the site names none. {@code key} is its name in the config, for errors. */
+    private static Path logo(String value, String key, Path baseDir) {
+        if (InstallerConfig.blank(value)) return null;
+        Path p = Path.of(value);
         if (!p.isAbsolute()) p = baseDir.resolve(p);
-        if (!Files.isRegularFile(p)) throw new InstallerException("'site.logo' not found: " + p);
+        if (!Files.isRegularFile(p)) throw new InstallerException("'" + key + "' not found: " + p);
         if (!p.getFileName().toString().toLowerCase(Locale.ROOT).matches(".*\\.(svg|png)"))
-            throw new InstallerException("'site.logo' must be an .svg or a .png: " + p);
+            throw new InstallerException("'" + key + "' must be an .svg or a .png: " + p);
         return p;
     }
 

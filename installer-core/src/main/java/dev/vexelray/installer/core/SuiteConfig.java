@@ -71,6 +71,8 @@ public final class SuiteConfig {
         public String accentColor;
         /** Optional: an .svg or .png beside the name in the header and as the tab icon, relative to the suite config. */
         public String logo;
+        /** Optional: an .svg or .png set large in the hero, to the right of the name on a wide screen and above it on a narrow one. */
+        public String heroLogo;
         /** Optional: a second button in the hero, beside the install command, for where to read more. */
         public Link heroAction;
         /** Links in the page header, in order. */

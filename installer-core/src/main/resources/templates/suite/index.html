@@ -45,6 +45,8 @@
   #field { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
   .hero::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, rgba(5,6,8,0.92) 0%, rgba(5,6,8,0.6) 45%, transparent 75%), linear-gradient(0deg, var(--bg) 0%, transparent 25%); pointer-events: none; }
   .hero .wrap { position: relative; z-index: 1; padding-top: clamp(48px, 9vw, 104px); padding-bottom: clamp(48px, 8vw, 96px); }
+  .hero-logo { display: block; width: clamp(88px, 24vw, 140px); height: auto; margin: 0 0 20px; filter: drop-shadow(0 0 36px rgba(62, 224, 255, 0.28)); }
+  @media (min-width: 1100px) { .hero-logo { position: absolute; top: clamp(48px, 9vw, 104px); right: 32px; width: clamp(280px, 30vw, 380px); margin: 0; } }
   .badge, .eyebrow { display: inline-block; font: 700 0.78rem/1 var(--mono); letter-spacing: 0.2em; text-transform: uppercase; color: var(--cyan); }
   h1 { font-size: clamp(3rem, 11vw, 7.5rem); line-height: 0.9; letter-spacing: -0.05em; font-weight: 900; margin: 18px 0 20px; background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; width: fit-content; padding: 0 0.04em 0.1em 0; }
   .tagline { font-size: clamp(1.1rem, 2.4vw, 1.5rem); line-height: 1.4; color: var(--text); max-width: 34ch; margin: 0; font-weight: 600; letter-spacing: -0.01em; }
@@ -155,6 +157,7 @@
   <div class="hero">
     <canvas id="field" aria-hidden="true"></canvas>
     <div class="wrap">
+      {{HERO_LOGO}}
       {{BADGE}}
       <h1>{{NAME}}</h1>
       <p class="tagline">{{TAGLINE}}</p>

@@ -200,6 +200,7 @@ so the command is short and the first thing people find:
     "feedbackUrl": "https://github.com/owner/repo/issues/new",
     "accentColor": "#2563eb",
     "logo": "site/mark.svg",
+    "heroLogo": "site/mark-full.svg",
     "heroAction": { "label": "What it is built on", "url": "https://owner.github.io/tech.html" },
     "links": [ { "label": "Docs", "url": "https://owner.github.io/docs/" } ],
     "footerLinks": [ { "label": "Licenses", "url": "https://owner.github.io/licenses.html" } ],
@@ -229,8 +230,9 @@ java -jar installer-core/target/installer-core-0.1.1-SNAPSHOT-cli.jar --suite su
 ```
 
 writes `index.html`, a copy of the suite's `install.ps1` (so the command is `irm https://owner.github.io/install.ps1 | iex`),
-each member's icon and screenshot under `img/` (and `site.logo` as `img/logo.svg` or `.png`), and `.nojekyll`. Only
-`site.url` is required. The page is dark, with the name over a live backdrop that draws only while it is on screen. It shows the
+each member's icon and screenshot under `img/` (and `site.logo` as `img/logo.svg` or `.png`, `site.heroLogo` as `img/hero-logo.svg` or `.png`), and `.nojekyll`. Only
+`site.url` is required. The page is dark, with the name over a live backdrop that draws only while it is on screen;
+`site.heroLogo` is set large beside the name, to its right on a wide screen and above it on a narrow one. It shows the
 command with a copy button (and `site.heroAction` as a button under it), a card for each member (its screenshot, or its icon when it has no `image`; its
 `description`), and what the install changes on the computer, worked out from the members' configs: install
 folders, shortcuts, the commands added to `PATH` and the applications that register file types. Each of

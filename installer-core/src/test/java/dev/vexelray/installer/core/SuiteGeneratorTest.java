@@ -463,10 +463,23 @@ class SuiteGeneratorTest {
         assertTrue(page.contains("<a class=\"brand\" href=\"./\"><img src=\"img/logo.svg\" alt=\"\">"), "and sits beside the name");
         assertTrue(page.contains("<a class=\"button ghost\" href=\"https://owner.github.io/tech.html\">Inside &amp; out</a>"));
         assertTrue(page.contains("<span class=\"stat\">0 fps</span><h3>"));
+        assertFalse(page.contains("<img class=\"hero-logo\""), "no hero logo unless one is named");
+
+        Files.writeString(tmp.resolve("big.svg"), "<svg xmlns=\"http://www.w3.org/2000/svg\"/>");
+        SuiteConfig big = siteSuite();
+        big.site.heroLogo = "big.svg";
+        site(big);
+        page = Files.readString(out.resolve("index.html"), StandardCharsets.UTF_8);
+        assertTrue(Files.isRegularFile(out.resolve("img/hero-logo.svg")), "the hero logo is copied beside the page");
+        assertTrue(page.contains("<img class=\"hero-logo\" src=\"img/hero-logo.svg\" alt=\"\">"), "and set in the hero");
 
         SuiteConfig noFile = siteSuite();
         noFile.site.logo = "missing.svg";
         assertThrows(InstallerException.class, () -> site(noFile));
+        SuiteConfig noHero = siteSuite();
+        noHero.site.heroLogo = "missing.svg";
+        InstallerException e = assertThrows(InstallerException.class, () -> site(noHero));
+        assertTrue(e.getMessage().contains("site.heroLogo"), e.getMessage());
         SuiteConfig halfAction = siteSuite();
         halfAction.site.heroAction = new SuiteConfig.Link();
         halfAction.site.heroAction.label = "Read";
