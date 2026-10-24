@@ -149,6 +149,7 @@ public final class LinuxTarget implements PlatformTarget {
         line(c.name, "the name");
         line(c.publisherOrName(), "the publisher");
         List<String> paths = new ArrayList<>();
+        List<String> appIds = new ArrayList<>();
         for (ResolvedBinary b : bins) {
             BinaryConfig bc = b.config();
             line(b.name(), "a binary name");
@@ -162,6 +163,15 @@ public final class LinuxTarget implements PlatformTarget {
             paths.add(installPath(sub(bc), b.file()));
             if (b.isJar()) paths.add(launcher(b));
             if (bc.shortcuts != null) line(bc.shortcuts.label, "a shortcut label");
+            if (!InstallerConfig.blank(bc.appId)) {
+                String id = bc.appId.trim();
+                if (!APP_ID.matcher(id).matches())
+                    throw new InstallerException("'" + id + "' cannot be an appId: it names a desktop entry, so it is"
+                            + " dot-separated parts of letters, digits, _ and -, none starting with a digit (" + b.name() + ")");
+                if (appIds.contains(id))
+                    throw new InstallerException("two binaries have the appId " + id + "; each program's windows go by their own");
+                appIds.add(id);
+            }
             if (bc.jvmArgs != null) for (String a : bc.jvmArgs) line(a, "a jvmArgs entry");
             if (bc.fileAssociations != null) for (FileAssociation fa : bc.fileAssociations) {
                 line(fa.description, "a file association description");
@@ -174,6 +184,10 @@ public final class LinuxTarget implements PlatformTarget {
                 throw new InstallerException("two files would be installed as " + paths.get(i).replace("{installDir}/", "")
                         + " (a jar's launcher is named after the binary); give one of them another name or dir");
     }
+
+    /** What a desktop entry name may be (the Desktop Entry Specification, "Desktop File ID"), without its {@code .desktop}. */
+    static final java.util.regex.Pattern APP_ID =
+            java.util.regex.Pattern.compile("[A-Za-z_][A-Za-z0-9_-]*(\\.[A-Za-z_][A-Za-z0-9_-]*)+");
 
     /** One line, no tabs: the manifest the scripts read is tab-separated, one record a line. */
     private static void line(String s, String what) {
@@ -211,6 +225,7 @@ public final class LinuxTarget implements PlatformTarget {
                 bc.exposes.forEach((cmd, rel) -> ex.put(cmd, rel.replace('\\', '/')));
             }
             e.put("addToPath", Boolean.TRUE.equals(bc.addToPath));
+            if (!InstallerConfig.blank(bc.appId)) e.put("appId", bc.appId.trim());
             if (b.icon() != null) iconEntry(e.putObject("icon"), b.icon(), sub);
             List<ResolvedBinary.ResolvedIcon> typeIcons = b.distinctTypeIcons();
             if (!typeIcons.isEmpty()) {
@@ -311,6 +326,7 @@ public final class LinuxTarget implements PlatformTarget {
      * vexelray-installer-linux  1
      * id        ID
      * name      NAME
+     * replaces  ID                             an id this application was installed under before (one each)
      * latest    VERSION                        newest release with a Linux build (else the newest)
      * tool      SCRIPT  SHA256  URL
      * version   VERSION                        then, for that version:
@@ -326,6 +342,7 @@ public final class LinuxTarget implements PlatformTarget {
      * runtime   VERSION  BIN  ID
      * jvmarg    VERSION  BIN  ARG
      * shortcut  VERSION  BIN  DESKTOP  MENU  GUI  LABEL
+     * appid     VERSION  BIN  APP-ID           names its desktop entry, and is the entry's StartupWMClass
      * expose    VERSION  BIN  COMMAND  PATH
      * assoc     VERSION  BIN  EXTENSION  MIME-TYPE  OWN-TYPE  ICON-FILE  DESCRIPTION
      * </pre>
@@ -337,6 +354,7 @@ public final class LinuxTarget implements PlatformTarget {
         out.add(MANIFEST_HEADER);
         out.add(rec("id", c.id));
         out.add(rec("name", c.name));
+        for (JsonNode was : manifest.path("replaces")) out.add(rec("replaces", was.asText()));
         String latest = null, newest = null;
         for (JsonNode v : manifest.path("versions")) {
             if (v.path("platforms").path("linux").isMissingNode()) continue;
@@ -376,6 +394,7 @@ public final class LinuxTarget implements PlatformTarget {
                 JsonNode sc = b.path("shortcuts");
                 if (!sc.isMissingNode()) out.add(rec("shortcut", ver, name, flag(sc.path("desktop")), flag(sc.path("startMenu")),
                         flag(sc.path("gui")), sc.path("label").asText()));
+                if (b.has("appId")) out.add(rec("appid", ver, name, b.path("appId").asText()));
                 b.path("exposes").fields().forEachRemaining(x -> out.add(rec("expose", ver, name, x.getKey(), x.getValue().asText())));
                 for (JsonNode fa : b.path("fileAssociations"))
                     out.add(rec("assoc", ver, name, fa.path("extension").asText(), fa.path("mimeType").asText(),

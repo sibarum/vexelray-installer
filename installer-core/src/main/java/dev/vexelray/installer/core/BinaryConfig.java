@@ -26,6 +26,14 @@ public final class BinaryConfig {
     public Boolean addToPath;
     public ShortcutConfig shortcuts;
     /**
+     * Linux: the name this program's windows go by on the desktop ({@code WM_CLASS}, or the Wayland {@code app_id}),
+     * such as {@code dev.example.myapp}. Its desktop entry is named after it and says it as {@code StartupWMClass}, so
+     * a dock shows the running program under the entry's icon. Without it the entry gets a name of the installer's
+     * own, which no window matches. A desktop entry name, so dot-separated parts of letters, digits, {@code _} and
+     * {@code -}, none starting with a digit. Not used on Windows yet.
+     */
+    public String appId;
+    /**
      * Icon for the shortcuts and the Apps entry: an {@code .ico}, or a square {@code .png} (256px or
      * more) that is converted. Shipped next to the binary. Native exes fall back to their own icon.
      */

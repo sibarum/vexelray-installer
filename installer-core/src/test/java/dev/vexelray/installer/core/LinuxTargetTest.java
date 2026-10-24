@@ -78,6 +78,7 @@ class LinuxTargetTest {
         app.shortcuts = new ShortcutConfig();
         app.shortcuts.label = "MyApp";
         app.shortcuts.startMenu = true;
+        app.appId = "dev.example.myapp";
         FileAssociation fa = new FileAssociation();
         fa.extension = "VXR";
         app.fileAssociations = List.of(fa);
@@ -133,6 +134,7 @@ class LinuxTargetTest {
         assertEquals("application/x-myapp-vxr", app.path("fileAssociations").get(0).path("mimeType").asText());
         assertTrue(app.path("fileAssociations").get(0).path("ownType").asBoolean());
         assertTrue(app.path("shortcuts").path("gui").asBoolean(), "a menu entry opens no terminal unless asked to");
+        assertEquals("dev.example.myapp", app.path("appId").asText());
         assertEquals("{installDir}/tool", linux.path("binaries").get(1).path("launcher").asText());
         assertEquals("{installDir}/rt", linux.path("binaries").get(2).path("installPath").asText());
         assertTrue(Files.exists(assets.resolve("1.0.0/app.png")), "the icon ships as a PNG");
@@ -148,6 +150,7 @@ class LinuxTargetTest {
         assertTrue(lines.contains("jvmarg\t1.0.0\ttool\t-Xmx1g"));
         assertTrue(lines.contains("expose\t1.0.0\trt\tjava\tbin/java"), txt);
         assertTrue(lines.contains("shortcut\t1.0.0\tapp\t1\t1\t1\tMyApp"));
+        assertTrue(lines.contains("appid\t1.0.0\tapp\tdev.example.myapp"), txt);
         assertTrue(lines.contains("assoc\t1.0.0\tapp\t.vxr\tapplication/x-myapp-vxr\t1\t-\tMyApp VXR file"));
         for (String l : lines) assertFalse(l.contains("\t\t") || l.endsWith("\t"), "no empty field: " + l);
 
@@ -157,6 +160,36 @@ class LinuxTargetTest {
         assertTrue(readme.contains("`~/.local/opt/myapp/rt/`"));
         assertTrue(readme.contains("\"$HOME/.local/opt/myapp/uninstall.sh\""));
         assertTrue(readme.contains("A macOS installer is planned"));
+    }
+
+    @Test
+    void aRenamedApplicationNamesWhatItReplacesAndForwardsItsOldFolder() throws IOException {
+        InstallerConfig c = config();
+        ReplacedInstall was = new ReplacedInstall();
+        was.id = "oldapp";
+        was.repoPath = "apps/oldapp/";
+        c.replaces = List.of(was);
+        run(c, "1.0.0");
+        assertEquals("oldapp", Json.tree(read("manifest.json")).path("replaces").get(0).asText());
+        assertTrue(read("manifest.linux.txt").lines().toList().contains("replaces\toldapp"));
+        // no repoPath of its own: the output folder is the repo's root, and the old folder is inside it
+        Path forward = out.resolve("apps/oldapp");
+        for (String f : List.of("manifest.json", "manifest.linux.txt", "install.sh"))
+            assertEquals(read(f), Files.readString(forward.resolve(f), StandardCharsets.UTF_8), f + " is forwarded as it is");
+        assertTrue(Files.readString(forward.resolve("README.md"), StandardCharsets.UTF_8).contains("renamed"));
+
+        InstallerConfig self = config();
+        ReplacedInstall same = new ReplacedInstall();
+        same.id = "myapp";
+        self.replaces = List.of(same);
+        assertTrue(assertThrows(InstallerException.class, () -> run(self, "1.0.0")).getMessage().contains("own id"));
+    }
+
+    @Test
+    void theOldFolderIsBesideTheNewOneInACheckoutOfTheRepo() {
+        assertEquals(tmp.resolve("site/apps/old"), InstallerGenerator.forwardDir(tmp.resolve("site/apps/new"), "apps/new", "apps/old"));
+        assertEquals(tmp.resolve("out/forward/apps/old"), InstallerGenerator.forwardDir(tmp.resolve("out"), "apps/new", "apps/old"));
+        assertEquals(tmp.resolve("out/apps/old"), InstallerGenerator.forwardDir(tmp.resolve("out"), "", "apps/old"));
     }
 
     @Test
@@ -232,6 +265,14 @@ class LinuxTargetTest {
         InstallerConfig tab = config();
         tab.linux.binaries.get(0).shortcuts.label = "My\tApp";
         assertThrows(InstallerException.class, () -> run(tab, "1.0.0"));
+
+        InstallerConfig oneWord = config();
+        oneWord.linux.binaries.get(0).appId = "myapp";
+        assertTrue(assertThrows(InstallerException.class, () -> run(oneWord, "1.0.0")).getMessage().contains("appId"));
+
+        InstallerConfig placed = config();
+        placed.linux.binaries.get(2).appId = "dev.example.rt";
+        assertTrue(assertThrows(InstallerException.class, () -> run(placed, "1.0.0")).getMessage().contains("appId"));
 
         InstallerConfig clash = config();
         Files.writeString(src.resolve("tool"), "x");

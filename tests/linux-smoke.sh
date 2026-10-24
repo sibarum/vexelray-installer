@@ -48,6 +48,12 @@ EOF
 gen() { java -jar "$cli" --config "$1" --version "$2" --out "$3" --assets "assets-$3" --base-url "$url/$3" --asset-base-url "$url/rel" > /dev/null \
         && mkdir -p "rel/v$2" && cp "assets-$3/$2"/* "rel/v$2/"; }
 export HOME="$work/home" XDG_DATA_HOME="$work/home/.local/share" XDG_CONFIG_HOME="$work/home/.config"
+# GNOME's dock pins, kept in a file: the real gsettings would reach this desktop's settings past the throwaway HOME
+mkdir -p "$work/bin"
+printf '#!/bin/sh\ncase $1 in get) cat "%s" ;; set) printf "%%s\\n" "$4" > "%s" ;; esac\n' "$work/fav" "$work/fav" > "$work/bin/gsettings"
+chmod +x "$work/bin/gsettings"
+printf "%s\n" "['firefox.desktop', 'vexelray-demo-demo.desktop']" > "$work/fav"
+export PATH="$work/bin:$PATH"
 opt="$HOME/.local/opt/demo"
 reg="$XDG_DATA_HOME/vexelray-installer/installs"
 
@@ -73,13 +79,13 @@ check "$run out/install.sh | grep -q 'already installed'" "a second run changes 
 
 echo "== update"
 printf '#!/bin/sh\necho "demo v2 $*"\n' > src/demo
-# 1.1.0 no longer ships the notices
+# 1.1.0 no longer ships the notices, and names its windows, so its desktop entries are renamed after them
 cat > demo2.json <<'EOF'
 { "id": "demo", "name": "Demo", "publisher": "Example", "description": "A demo, it's quoted.", "repo": "owner/demo",
   "linux": {
     "system": { "memoryMb": 1, "diskMb": 1 },
     "binaries": [
-      { "name": "demo", "source": "src/demo", "addToPath": true, "icon": "src/icon.png",
+      { "name": "demo", "source": "src/demo", "addToPath": true, "icon": "src/icon.png", "appId": "dev.example.demo",
         "shortcuts": { "label": "Demo", "startMenu": true },
         "fileAssociations": [ { "extension": "vxr", "description": "Demo scene" } ] },
       { "name": "tool", "source": "src/tool-uber.jar", "file": "tool.jar", "javaMin": 11, "jvmArgs": ["-Dx=it's"] },
@@ -90,6 +96,16 @@ check "$run $opt/update.sh --check | grep -q '1.1.0 is available'" "update.sh --
 check "$run $opt/update.sh --yes > update.log 2>&1" "update.sh --yes updates"
 check "[ \"\$($opt/demo)\" = 'demo v2 ' ]" "the new binary is in place"
 check "[ ! -e $opt/NOTICES.txt ]" "a file the new version dropped is gone"
+entry="$XDG_DATA_HOME/applications/dev.example.demo.desktop"
+check "grep -q '^StartupWMClass=dev.example.demo\$' $entry" "the menu entry is named after the app id, and matches its windows"
+check "[ ! -e $XDG_DATA_HOME/applications/vexelray-demo-demo.desktop ]" "the menu entry under the old name is gone"
+check "[ -f $HOME/Desktop/dev.example.demo.desktop ] && [ ! -e $HOME/Desktop/vexelray-demo-demo.desktop ]" "so is the old desktop launcher"
+check "grep -qF \"['firefox.desktop', 'dev.example.demo.desktop']\" $work/fav" "a dock pin follows it"
+command -v desktop-file-validate >/dev/null 2>&1 && check "desktop-file-validate $entry" "the renamed menu entry validates"
+if grep -q 'Opens .vxr files (default)' install.log; then
+    check "grep -q '^application/x-demo-vxr=dev.example.demo.desktop;\\{0,1\\}\$' $XDG_CONFIG_HOME/mimeapps.list" "it stays the default for .vxr"
+    check "! grep -q 'vexelray-demo-demo' $XDG_CONFIG_HOME/mimeapps.list" "and the old name is not left there"
+fi
 
 echo "== a tampered download is refused, and what was installed stays"
 printf 'evil' >> rel/v1.1.0/demo
@@ -134,12 +150,44 @@ check "INSTALL_ONLY=two,win $run suite/install.sh > suite2.log 2>&1 && [ \"\$($H
 check "grep -q 'Win has no Linux version yet' suite2.log" "a Windows-only member is reported"
 check "! INSTALL_ONLY=nope $run suite/install.sh > /dev/null 2>&1" "an unknown id is refused"
 
+echo "== a renamed application replaces its old install, through the old install's own updater"
+printf '#!/bin/sh\necho "renamed $*"\n' > src/demo
+cat > old.json <<'EOF2'
+{ "id": "olddemo", "name": "Old Demo", "repo": "owner/site", "repoPath": "apps/olddemo",
+  "linux": { "binaries": [
+      { "name": "demo", "source": "src/demo", "addToPath": true, "icon": "src/icon.png", "appId": "dev.example.olddemo",
+        "shortcuts": { "label": "Old Demo", "startMenu": true },
+        "fileAssociations": [ { "extension": "dmo", "contentType": "text/x-demo" } ] } ] } }
+EOF2
+gen old.json 5.0.0 site/apps/olddemo
+check "$run site/apps/olddemo/install.sh > old.log 2>&1" "the old one installs"
+printf "%s\n" "['vexelray-demo-demo.desktop', 'dev.example.olddemo.desktop']" > "$work/fav"
+cat > new.json <<'EOF2'
+{ "id": "newdemo", "name": "New Demo", "repo": "owner/site", "repoPath": "apps/newdemo",
+  "replaces": [ { "id": "olddemo", "repoPath": "apps/olddemo" } ],
+  "linux": { "binaries": [
+      { "name": "demo", "source": "src/demo", "addToPath": true, "icon": "src/icon.png", "appId": "dev.example.newdemo",
+        "shortcuts": { "label": "New Demo", "startMenu": true },
+        "fileAssociations": [ { "extension": "dmo", "contentType": "text/x-demo" } ] } ] } }
+EOF2
+gen new.json 6.0.0 site/apps/newdemo
+check "awk -F'\t' '\$1 == \"replaces\" && \$2 == \"olddemo\" { r = 1 } \$1 == \"id\" && \$2 == \"newdemo\" { i = 1 } END { exit !(r && i) }' site/apps/olddemo/manifest.linux.txt" "the old folder now forwards to the new manifest"
+check "$run $HOME/.local/opt/olddemo/update.sh --yes > rename.log 2>&1" "the old updater updates"
+check "[ \"\$($HOME/.local/opt/newdemo/demo)\" = 'renamed ' ] && [ -f $reg/newdemo.state ]" "into the new id and folder"
+check "[ ! -e $HOME/.local/opt/olddemo ] && [ ! -e $reg/olddemo.state ] && [ ! -e $reg/olddemo.json ]" "and the old install is gone"
+check "[ -L $HOME/.local/bin/demo ] && [ \"\$($HOME/.local/bin/demo)\" = 'renamed ' ]" "a command both had keeps working, as the new one's"
+check "[ -f $XDG_DATA_HOME/applications/dev.example.newdemo.desktop ] && [ ! -e $XDG_DATA_HOME/applications/dev.example.olddemo.desktop ]" "the menu entry is the new one"
+check "grep -qF \"'dev.example.newdemo.desktop'\" $work/fav && ! grep -q olddemo $work/fav" "the dock pin moved with it"
+if grep -q 'Opens .dmo files (default)' old.log; then
+    check "grep -q '^text/x-demo=dev.example.newdemo.desktop;\\{0,1\\}\$' $XDG_CONFIG_HOME/mimeapps.list && ! grep -q olddemo $XDG_CONFIG_HOME/mimeapps.list" "it is still the default for .dmo"
+fi
+
 echo "== uninstall"
 check "$run $opt/uninstall.sh --list | grep -q '^two '" "--list shows every install"
 check "! $run $opt/uninstall.sh < /dev/null > /dev/null 2>&1" "without a terminal it needs --yes"
 check "$run $opt/uninstall.sh --all --yes > /dev/null" "--all --yes removes everything"
-check "[ ! -e $opt ] && [ ! -e $HOME/.local/opt/two ] && [ ! -e $XDG_DATA_HOME/applications/vexelray-demo-demo.desktop ]" "the folders and menu entries are gone"
-check "[ ! -e $HOME/Desktop/vexelray-demo-demo.desktop ] && [ ! -e $XDG_DATA_HOME/mime/packages/vexelray-demo.xml ]" "and the launcher and the file type"
+check "[ ! -e $opt ] && [ ! -e $HOME/.local/opt/two ] && [ ! -e $HOME/.local/opt/newdemo ] && [ ! -e $XDG_DATA_HOME/applications/dev.example.demo.desktop ]" "the folders and menu entries are gone"
+check "[ ! -e $HOME/Desktop/dev.example.demo.desktop ] && [ ! -e $XDG_DATA_HOME/mime/packages/vexelray-demo.xml ]" "and the launcher and the file type"
 check "[ -z \"\$(ls $reg)\" ]" "no records are left"
 
 echo
