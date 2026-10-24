@@ -27,6 +27,12 @@ public final class InstallerConfig {
     /** Where people report problems; the diagnostic report says to attach itself there. Defaults to the repo's new-issue page. */
     public String issuesUrl;
 
+    /**
+     * The ids this application was installed under before a rename ({@link ReplacedInstall}). Keep them for as long
+     * as an install under an old id might still be out there.
+     */
+    public java.util.List<ReplacedInstall> replaces;
+
     public PlatformConfig windows;
     /** Its own binaries: a Linux build is not the Windows one. */
     public PlatformConfig linux;

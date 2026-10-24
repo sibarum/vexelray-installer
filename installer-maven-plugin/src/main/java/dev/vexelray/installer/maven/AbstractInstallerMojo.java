@@ -63,6 +63,10 @@ abstract class AbstractInstallerMojo extends AbstractMojo {
     @Parameter(property = "installer.issuesUrl")
     String issuesUrl;
 
+    /** The ids this application was installed under before a rename, and where their files were committed. */
+    @Parameter
+    java.util.List<dev.vexelray.installer.core.ReplacedInstall> replaces;
+
     /** The Windows installer: install folder and the binaries to ship. */
     @Parameter
     PlatformConfig windows;
@@ -106,6 +110,7 @@ abstract class AbstractInstallerMojo extends AbstractMojo {
         c.releasesRepo = releasesRepo;
         c.tagFormat = tagFormat;
         c.issuesUrl = issuesUrl;
+        c.replaces = replaces;
         c.windows = windows;
         c.linux = linux;
         for (PlatformConfig p : new PlatformConfig[] {windows, linux}) {

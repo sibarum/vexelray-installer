@@ -91,6 +91,7 @@ Defaults come from the project: `id` = artifactId, `name` = project name, `descr
 | Parameter | Meaning |
 | --- | --- |
 | `id`, `name`, `publisher`, `description`, `version` | metadata; `id` is lowercase letters, digits, `. _ -` |
+| `replaces[]` | `{id, repoPath}`: the ids this application was installed under before a rename, and where their generated files were committed in the same `repo`. See Renames below |
 | `repo`, `branch`, `repoPath` | where the generated files are committed (`repoPath` for a subfolder); branch defaults to `main` |
 | `releasesRepo`, `tagFormat` | where binaries are downloaded from; defaults `repo` and `v{version}` |
 | `issuesUrl` | where people report problems; the diagnostic report says to attach itself there. Default: `https://github.com/<repo>/issues/new` |
@@ -101,7 +102,7 @@ Defaults come from the project: `id` = artifactId, `name` = project name, `descr
 | `windows.system` | what the computer must have: `windows` (oldest version, `10.0.19041` or a build number), `memoryMb`, `diskMb` (free on the install drive), `vulkan` (`1.3`), `vulkanExtensions[]`, `d3d12` (feature level, `11_0` to `12_2`). The GPU fields must all be met by one GPU: its Vulkan device, and the DXGI adapter with the same LUID. See Diagnostics |
 | `linux.installDir` | default `$HOME/.local/opt/{id}`; starts with `/`, `~/`, `$HOME/` or `$XDG_DATA_HOME/`, and may use `{id}` and `{name}` |
 | `linux.registryDir` | where install manifests live; default `$XDG_DATA_HOME/vexelray-installer/installs` (`~/.local/share/...`) |
-| `linux.binaries[]` | as `windows.binaries[]`, except: an archive is a `.tar.gz` (or `.tgz`), whose `exposes` paths are checked against it; an `icon` is a square `.png` (an `.ico` gives its largest PNG frame), shipped as `<name>.png`; `shortcuts.startMenu` is a menu entry, `shortcuts.desktop` a launcher in the Desktop folder if there is one, and `shortcuts.gui` (default true) is `Terminal=false`; `addToPath` links the command into `~/.local/bin`; `signedBy` does not apply |
+| `linux.binaries[]` | as `windows.binaries[]`, except: an archive is a `.tar.gz` (or `.tgz`), whose `exposes` paths are checked against it; an `icon` is a square `.png` (an `.ico` gives its largest PNG frame), shipped as `<name>.png`; `shortcuts.startMenu` is a menu entry, `shortcuts.desktop` a launcher in the Desktop folder if there is one, and `shortcuts.gui` (default true) is `Terminal=false`; `addToPath` links the command into `~/.local/bin`; `signedBy` does not apply; `appId` is the name the program's windows go by (`WM_CLASS`, or the Wayland `app_id`), which names its desktop entry `<appId>.desktop` and is its `StartupWMClass`, so a dock shows the running program under its icon (see Renames below) |
 | `linux.requires[]` | as `windows.requires[]` |
 | `linux.system` | `glibc` (oldest, `2.31`), `memoryMb`, `diskMb`, `vulkan`, `vulkanExtensions[]` (one Vulkan device must have them all, read from `vulkaninfo`) |
 | `linux.arch` | what `uname -m` must say; default `x86_64` when there is a native binary or an archive, none for jars and files |
@@ -363,8 +364,8 @@ one tab-separated record a line, rewritten from it on every run (its format is d
   refusing an entry that would leave its folder; a jar gets a launcher script named after it, which finds Java
   through its `runtime`'s `<id>.home`, `JAVA_HOME` or `PATH`. `addToPath` links the command into `~/.local/bin`,
   never over a file that is not its own, and says so when `~/.local/bin` is not on `PATH` yet. Shortcuts are
-  desktop entries (`~/.local/share/applications/vexelray-<id>-<name>.desktop`, and a launcher in the Desktop
-  folder), with the binary's PNG icon. File types are a shared-mime-info package
+  desktop entries (`~/.local/share/applications/<appId>.desktop`, or `vexelray-<id>-<name>.desktop` for a binary
+  without an `appId`, and a launcher in the Desktop folder), with the binary's PNG icon. File types are a shared-mime-info package
   (`~/.local/share/mime/packages/vexelray-<id>.xml`) whose globs weigh less than the usual, so an extension
   another type has keeps it; a type without a `contentType` is the install's own (`application/x-<id>-<ext>`) and
   gets the association's icon in `hicolor`. The binary's desktop entry lists the types, and becomes the default
@@ -382,6 +383,64 @@ one tab-separated record a line, rewritten from it on every run (its format is d
 
 There is no window, no app manager and no diagnostic report on Linux yet.
 
+### Renames: an upgrade removes what the old version named differently
+
+**Rule:** when a new version puts something in place under a different name than the version before it did, the
+upgrade must remove the old one, and carry over whatever the user attached to it. Anything left behind turns up as a
+duplicate menu entry, a launcher that runs nothing, a default application that no longer exists, or a dock pin that
+went blank. Check this every time a name derived from the config changes: a binary's `name`, `file` or `dir`, an
+`appId`, the install `id`, or the naming scheme in the templates themselves.
+
+What the Linux `install.sh` does about it today:
+
+- **Files, shortcuts, links.** Every one is recorded by its full path in `<id>.state`. Whatever the last install
+  recorded and this one does not is removed (step 6, through the backup, so a rollback restores it). A renamed
+  desktop entry or launcher therefore goes away by itself.
+- **Default applications.** A type whose default is an entry the last install registered, under whatever name, stays
+  this install's default under the new name, and the old name is taken out of `mimeapps.list`.
+- **Dock pins.** A GNOME favourite (`org.gnome.shell favorite-apps`) on the old entry is moved to the new one. The
+  state records each binary's entry as `entry NAME DESKTOP-ID`, so the next rename knows the old name; for an install
+  from before that record existed, the old name is the `vexelray-<id>-<name>.desktop` the installer used then.
+- **Links on PATH.** A link the last install recorded is its own to replace, as is one the replaced install
+  recorded (see `replaces` below).
+- **Comparing with the old record.** The steps after the commit compare against a copy of the old `<id>.state` taken
+  before the commit, because the commit replaces it. (Before this, they compared the new record with itself, and a
+  default the old version had was never dropped.)
+
+#### Renaming the install itself: `replaces`
+
+A new `id` is a different install as far as the records go, so the config says what it used to be:
+
+```json
+"id": "viewer",
+"replaces": [ { "id": "pix", "repoPath": "apps/pix" } ]
+```
+
+- **The installer** (both platforms), finding no install under its own id but one under a replaced id, carries that
+  install's choices over (shortcuts, PATH, file types), installs into its own default folder (the old updater passes
+  the old folder, which is ignored), and once it has committed, removes the old install with its own uninstaller
+  (`uninstall.sh --id pix --yes`, `uninstall.ps1 -Id pix -Yes`). Anything both placed under the same name, such as a
+  command on PATH, a Start menu shortcut or a desktop entry, is taken out of the old record first, so the uninstaller
+  leaves it alone. Defaults and dock pins follow as above. If removing the old one fails, the new one stays installed
+  and the installer says how to remove the old one.
+- **The generator** writes the new application's `manifest.json`, `manifest.linux.txt` and install scripts to the
+  replaced `repoPath` as well, with a README saying where it went. Old installs' updaters (and the apps' own update
+  checks) still read the old manifest URL; they now find the new application's latest version there and run its
+  installer, which does the above. That folder is beside the application's own when the output folder is its
+  `repoPath` in a checkout of the repo (as `vexelray-dist/deploy.ps1` generates `apps/<id>`), and under `forward/` in
+  the output folder otherwise. Keep `replaces` for as long as old installs may be out there: every release refreshes
+  the forwarding copies.
+- **The application** lists the old name in `@VexelApp(formerNames = ...)`, which moves its settings directory
+  (`~/.<name>`), and the build checks the two lists agree (`vexelray-build/README.md`).
+
+The Linux side is covered end to end by `tests/linux-smoke.sh`. The Windows side follows the same steps in
+`install.ps1` but has not been run yet: try it on a Windows machine before relying on it.
+
+Not covered yet: pins in other docks (KDE Plasma's task manager keeps `applications:<entry>` in its own config), and
+Windows. Windows has no `appId` yet. When it gets one (an AppUserModelID on the shortcuts and the process), the Start
+menu shortcuts and taskbar pins named after the old scheme need the same treatment in `install.ps1`, and `update.ps1`
+and the app manager in `manager.ps1` need to agree with it.
+
 The generated scripts are pure ASCII with LF endings, because their hashes are recorded in
 `manifest.json` and must survive `irm | iex`, `curl | sh` and git.
 
@@ -396,7 +455,8 @@ and register it in `InstallerGenerator`'s default target list.
 
 - `uninstall` and `update` are PowerShell scripts with `.cmd` launchers, not compiled `.exe`s.
 - Windows PowerShell 5.1 or newer; per-user install only (no admin, no HKLM).
-- Linux: per-user only (no root, no `/opt`); x86_64 unless `arch` says otherwise. An application's file types
+- Linux: per-user only (no root, no `/opt`); x86_64 unless `arch` says otherwise. A dock pin follows a renamed
+  desktop entry only in GNOME (see Renames). An application's file types
   and its menu entry show once the desktop rereads them, which the installer asks for when
   `update-desktop-database` and `update-mime-database` are installed.
 - GitHub's raw host caches for a few minutes after a push.
