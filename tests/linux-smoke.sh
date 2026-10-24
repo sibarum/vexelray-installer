@@ -75,7 +75,7 @@ check "[ -f $HOME/Desktop/vexelray-demo-demo.desktop ]" "a desktop launcher"
 check "grep -q 'glob pattern=\"\\*.vxr\"' $XDG_DATA_HOME/mime/packages/vexelray-demo.xml" "the .vxr type"
 check "grep -q '\"platform\": \"linux\"' $reg/demo.json && grep -q '\"rtbin\": { \"path\": \"$opt/rt/bin/rt\"' $reg/demo.json" "the install record"
 command -v desktop-file-validate >/dev/null 2>&1 && check "desktop-file-validate $XDG_DATA_HOME/applications/vexelray-demo-demo.desktop" "the menu entry validates"
-check "$run out/install.sh | grep -q 'already installed'" "a second run changes nothing"
+check "$run out/install.sh | grep 'already installed' > /dev/null" "a second run changes nothing"
 
 echo "== update"
 printf '#!/bin/sh\necho "demo v2 $*"\n' > src/demo
@@ -92,7 +92,7 @@ cat > demo2.json <<'EOF'
       { "source": "src/rt.tar.gz", "dir": "rt", "exposes": { "rtbin": "bin/rt" } } ] } }
 EOF
 gen demo2.json 1.1.0 out
-check "$run $opt/update.sh --check | grep -q '1.1.0 is available'" "update.sh --check sees 1.1.0"
+check "$run $opt/update.sh --check | grep '1.1.0 is available' > /dev/null" "update.sh --check sees 1.1.0"
 check "$run $opt/update.sh --yes > update.log 2>&1" "update.sh --yes updates"
 check "[ \"\$($opt/demo)\" = 'demo v2 ' ]" "the new binary is in place"
 check "[ ! -e $opt/NOTICES.txt ]" "a file the new version dropped is gone"
@@ -123,7 +123,7 @@ cp "$opt/demo" "$bk/1"
 printf 'backup\t%s\nput\t%s\t%s\nput\t%s\t-\n' "$bk" "$opt/demo" "$bk/1" "$opt/junk" > "$reg/demo.journal"
 printf 'half-written' > "$opt/demo"
 touch "$opt/junk"
-check "$run out/install.sh | grep -q 'did not finish'" "the next run notices"
+check "$run out/install.sh | grep 'did not finish' > /dev/null" "the next run notices"
 check "[ \"\$($opt/demo)\" = 'demo v2 ' ] && [ ! -e $opt/junk ] && [ ! -e $reg/demo.journal ]" "and puts it back"
 
 echo "== options are remembered"
@@ -183,7 +183,7 @@ if grep -q 'Opens .dmo files (default)' old.log; then
 fi
 
 echo "== uninstall"
-check "$run $opt/uninstall.sh --list | grep -q '^two '" "--list shows every install"
+check "$run $opt/uninstall.sh --list | grep '^two ' > /dev/null" "--list shows every install"
 check "! $run $opt/uninstall.sh < /dev/null > /dev/null 2>&1" "without a terminal it needs --yes"
 check "$run $opt/uninstall.sh --all --yes > /dev/null" "--all --yes removes everything"
 check "[ ! -e $opt ] && [ ! -e $HOME/.local/opt/two ] && [ ! -e $HOME/.local/opt/newdemo ] && [ ! -e $XDG_DATA_HOME/applications/dev.example.demo.desktop ]" "the folders and menu entries are gone"
