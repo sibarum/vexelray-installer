@@ -90,14 +90,33 @@ public final class InstallerGenerator {
         List<PlatformTarget> active = new ArrayList<>();
         for (PlatformTarget t : targets) if (t.configOf(c) != null) active.add(t);
         if (active.isEmpty()) throw new InstallerException("config enables no platform (add a 'windows' or a 'linux' section)");
+        // Every platform the config has, in section order. One left out of this run is kept as the manifest has it:
+        // each platform publishes into a release on its own, so another's build of this version may already be there.
+        List<PlatformTarget> configured = new ArrayList<>();
+        for (PlatformTarget t : defaultTargets()) {
+            PlatformTarget own = active.stream().filter(a -> a.key().equals(t.key())).findFirst().orElse(t);
+            if (own.configOf(c) != null) configured.add(own);
+        }
 
         Path assetOut = r.assetsDir.resolve(version);
         Files.createDirectories(assetOut);
         Files.createDirectories(r.outDir);
 
+        Path manifestPath = r.outDir.resolve("manifest.json");
+        JsonNode prev = Files.exists(manifestPath) ? Json.tree(Files.readString(manifestPath, StandardCharsets.UTF_8)) : null;
+        if (prev != null && !prev.path("id").asText().equals(c.id))
+            throw new InstallerException("existing manifest.json is for '" + prev.path("id").asText() + "', not '" + c.id + "'");
+        JsonNode prevEntry = null;
+        if (prev != null) for (JsonNode v : prev.path("versions")) if (v.path("version").asText().equals(version)) prevEntry = v;
+
         // 1. artifacts
         Map<PlatformTarget, List<ResolvedBinary>> resolved = new LinkedHashMap<>();
         Map<String, String> fileHashes = new LinkedHashMap<>();
+        // A kept platform's files are already uploaded to this release, and a file of the same name would replace them
+        Map<String, String> keptFiles = new LinkedHashMap<>();
+        if (prevEntry != null) for (PlatformTarget t : configured) {
+            if (!active.contains(t)) keptFiles.putAll(releaseFiles(prevEntry.path("platforms").path(t.key())));
+        }
         List<Path> assets = new ArrayList<>();
         for (PlatformTarget t : active) {
             PlatformConfig p = t.configOf(c);
@@ -116,12 +135,15 @@ public final class InstallerGenerator {
                 for (FileAssociation fa : b.fileAssociations == null ? List.<FileAssociation>of() : b.fileAssociations)
                     if (!extensions.add(normalizeExtension(fa.extension)))
                         throw new InstallerException("two binaries associate the extension '" + normalizeExtension(fa.extension) + "'");
-                String prev = fileHashes.put(rb.file(), rb.sha256());
-                if (prev != null && !prev.equals(rb.sha256()))
+                String hashed = fileHashes.put(rb.file(), rb.sha256());
+                if (hashed != null && !hashed.equals(rb.sha256()))
                     throw new InstallerException("two different binaries share the file name '" + rb.file() + "'");
                 if (bins.stream().anyMatch(x -> x.file().equals(rb.file())))
                     throw new InstallerException("two binaries share the file name '" + rb.file() + "'");
                 bins.add(rb);
+                checkKept(keptFiles, rb.file(), rb.sha256());
+                if (rb.icon() != null) checkKept(keptFiles, rb.icon().file(), rb.icon().sha256());
+                for (ResolvedBinary.ResolvedIcon ti : rb.distinctTypeIcons()) checkKept(keptFiles, ti.file(), ti.sha256());
                 if (!assets.contains(rb.staged())) assets.add(rb.staged());
                 if (rb.icon() != null) {
                     String iprev = fileHashes.put(rb.icon().file(), rb.icon().sha256());
@@ -141,7 +163,7 @@ public final class InstallerGenerator {
         // 2. scripts
         List<Path> written = new ArrayList<>();
         Map<String, String> scriptHashes = new LinkedHashMap<>();
-        ObjectNode tools = Json.object();
+        ObjectNode generatedTools = Json.object();
         for (PlatformTarget t : active) {
             String installerUrl = baseUrl + "/" + t.scriptNames().get(0);
             String cfgJson = Json.compact(t.scriptConfig(c, t.configOf(c), manifestUrl)).replace("'", "''");
@@ -155,48 +177,45 @@ public final class InstallerGenerator {
                 written.add(dest);
                 String sha = sha256(dest);
                 scriptHashes.put(script, sha);
-                ObjectNode tool = tools.putObject(script);
+                ObjectNode tool = generatedTools.putObject(script);
                 tool.put("url", baseUrl + "/" + script);
                 tool.put("sha256", sha);
             }
         }
+        // a kept platform's scripts are the ones already committed, so their entries stay as the manifest has them
+        ObjectNode tools = Json.object();
+        for (PlatformTarget t : configured) {
+            JsonNode from = active.contains(t) ? generatedTools : prev == null ? Json.object() : prev.path("tools");
+            for (String script : t.scriptNames()) if (from.has(script)) tools.set(script, from.get(script));
+        }
 
         // 3. manifest, merged with history
-        Path manifestPath = r.outDir.resolve("manifest.json");
         String now = STAMP.format(r.clock.instant().atZone(ZoneOffset.UTC));
         List<JsonNode> history = new ArrayList<>();
-        String publishedAt = now;
-        boolean replaced = false;
-        if (Files.exists(manifestPath)) {
-            JsonNode prev = Json.tree(Files.readString(manifestPath, StandardCharsets.UTF_8));
-            String prevId = prev.path("id").asText();
-            if (!prevId.equals(c.id))
-                throw new InstallerException("existing manifest.json is for '" + prevId + "', not '" + c.id + "'");
-            for (JsonNode v : prev.path("versions")) {
-                if (v.path("version").asText().equals(version)) {
-                    replaced = true;
-                    publishedAt = v.path("publishedAt").asText(now);
-                } else {
-                    history.add(v);
-                }
-            }
-        }
+        String publishedAt = prevEntry == null ? now : prevEntry.path("publishedAt").asText(now);
+        if (prev != null) for (JsonNode v : prev.path("versions")) if (v != prevEntry) history.add(v);
         ObjectNode entry = Json.object();
         entry.put("version", version);
         entry.put("publishedAt", publishedAt);
         entry.put("notes", r.notes == null ? "" : r.notes);
         ObjectNode installer = entry.putObject("installer");
-        scriptHashes.forEach(installer::put);
         ObjectNode platforms = entry.putObject("platforms");
-        for (var e : resolved.entrySet()) {
-            platforms.set(e.getKey().key(), e.getKey().manifestEntry(c, e.getKey().configOf(c), e.getValue()));
+        for (PlatformTarget t : configured) {
+            if (active.contains(t)) {
+                for (String script : t.scriptNames()) installer.put(script, scriptHashes.get(script));
+                platforms.set(t.key(), t.manifestEntry(c, t.configOf(c), resolved.get(t)));
+            } else if (prevEntry != null && prevEntry.path("platforms").has(t.key())) {
+                for (String script : t.scriptNames())
+                    if (prevEntry.path("installer").has(script)) installer.set(script, prevEntry.path("installer").get(script));
+                platforms.set(t.key(), prevEntry.path("platforms").get(t.key()));
+            }
         }
-        if (replaced) entry.put("updatedAt", now);
+        if (prevEntry != null) entry.put("updatedAt", now);
         history.add(entry);
         history.sort((a, b) -> Versions.NEWEST_FIRST.compare(a.path("version").asText(), b.path("version").asText()));
-        String latest = history.stream().map(v -> v.path("version").asText())
-                .filter(v -> !Versions.isPre(v)).findFirst()
-                .orElse(history.get(0).path("version").asText());
+        // Read by the Windows scripts, and by every updater already installed, which install that version's Windows
+        // build: so it is the newest release the first platform has, not one only a later platform has published yet
+        String latest = latest(history, configured.get(0).key());
 
         ObjectNode manifest = Json.object();
         manifest.put("schemaVersion", 1);
@@ -215,7 +234,8 @@ public final class InstallerGenerator {
         history.forEach(versions::add);
         writeText(manifestPath, Json.pretty(manifest), false);
         written.add(manifestPath);
-        for (PlatformTarget t : active) {
+        for (PlatformTarget t : configured) {
+            if (!active.contains(t) && history.stream().noneMatch(v -> v.path("platforms").has(t.key()))) continue;
             for (var f : t.companionFiles(c, manifest).entrySet()) {
                 Path dest = r.outDir.resolve(f.getKey());
                 writeText(dest, f.getValue(), false);
@@ -224,14 +244,17 @@ public final class InstallerGenerator {
         }
 
         // 4. README
+        // each platform's section names the version its own installer installs; a kept one's binaries come from the manifest
         StringBuilder sections = new StringBuilder();
         String firstCommand = null;
-        for (var e : resolved.entrySet()) {
-            PlatformTarget t = e.getKey();
+        for (PlatformTarget t : configured) {
             String installerUrl = baseUrl + "/" + t.scriptNames().get(0);
-            if (firstCommand == null) firstCommand = t.installCommand(installerUrl);
+            String own = latest(history, t.key());
+            List<ResolvedBinary> bins = resolved.containsKey(t) ? resolved.get(t) : publishedBinaries(c, t, history, own);
+            if (bins == null) continue;
+            if (firstCommand == null && active.contains(t)) firstCommand = t.installCommand(installerUrl);
             sections.append(t.readmeSection(new PlatformTarget.ReadmeContext(
-                    c, t.configOf(c), e.getValue(), latest, installerUrl, manifestUrl))).append('\n');
+                    c, t.configOf(c), bins, own, installerUrl, manifestUrl))).append('\n');
         }
         String readme = Templates.lf(Templates.render("README.md", Map.of(
                 "NAME", c.name,
@@ -239,7 +262,7 @@ public final class InstallerGenerator {
                 "PLATFORM_SECTIONS", sections.toString().stripTrailing() + "\n",
                 "MANIFEST_URL", manifestUrl,
                 "VERSION", latest,
-                "PLANNED", resolved.keySet().stream().anyMatch(t -> t.key().equals("linux"))
+                "PLANNED", configured.stream().anyMatch(t -> t.key().equals("linux"))
                         ? "A macOS installer is planned" : "macOS and Linux installers are planned")));
         Path readmePath = r.outDir.resolve("README.md");
         if (Files.exists(readmePath) && !Files.readString(readmePath, StandardCharsets.UTF_8).contains(README_MARKER)) {
@@ -254,11 +277,12 @@ public final class InstallerGenerator {
             Path forward = forwardDir(r.outDir, c.repoPathTrimmed(), ri.repoPath.replaceAll("^[/\\\\]+|[/\\\\]+$", ""));
             Files.createDirectories(forward);
             List<String> copied = new ArrayList<>(List.of("manifest.json"));
-            for (PlatformTarget t : active) {
+            for (PlatformTarget t : configured) {
                 copied.add(t.scriptNames().get(0));
                 copied.addAll(t.companionFiles(c, manifest).keySet());
             }
             for (String f : copied) {
+                if (!Files.exists(r.outDir.resolve(f))) continue;   // a kept platform that has never been generated here
                 Path dest = forward.resolve(f);
                 Files.copy(r.outDir.resolve(f), dest, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
                 written.add(dest);
@@ -308,6 +332,64 @@ public final class InstallerGenerator {
     }
 
     static boolean validId(String id) { return id != null && ID.matcher(id).matches(); }
+
+    /**
+     * The version an installer for {@code platform} installs when none is asked for: the newest release with a build
+     * for it, else its newest prerelease. With no build for it at all, the newest release of any platform.
+     */
+    static String latest(List<JsonNode> newestFirst, String platform) {
+        String release = null, pre = null, any = null;
+        for (JsonNode v : newestFirst) {
+            String ver = v.path("version").asText();
+            if (any == null && !Versions.isPre(ver)) any = ver;
+            if (!v.path("platforms").has(platform)) continue;
+            if (pre == null) pre = ver;
+            if (release == null && !Versions.isPre(ver)) release = ver;
+        }
+        if (release != null) return release;
+        if (pre != null) return pre;
+        return any != null ? any : newestFirst.get(0).path("version").asText();
+    }
+
+    /** File name to SHA-256 of everything a manifest's {@code platforms.<key>} entry has uploaded to its release. */
+    private static Map<String, String> releaseFiles(JsonNode platform) {
+        Map<String, String> files = new LinkedHashMap<>();
+        for (JsonNode b : platform.path("binaries")) {
+            files.put(b.path("file").asText(), b.path("sha256").asText());
+            if (b.has("icon")) files.put(b.path("icon").path("file").asText(), b.path("icon").path("sha256").asText());
+            for (JsonNode i : b.path("fileIcons")) files.put(i.path("file").asText(), i.path("sha256").asText());
+        }
+        return files;
+    }
+
+    /** The same file may be in both platforms' builds (a notices file), but only as the same bytes: there is one upload. */
+    private static void checkKept(Map<String, String> kept, String file, String sha256) {
+        String other = kept.get(file);
+        if (other != null && !other.equals(sha256))
+            throw new InstallerException("'" + file + "' is already in this release for another platform, with other contents; "
+                    + "publishing it would change that platform's download under it. Give it the same contents, or another name");
+    }
+
+    /**
+     * A kept platform's binaries as the manifest has them at {@code version}, matched to the config by name, for its
+     * README section. Null when that version has no build for it, or the config no longer names the same binaries.
+     */
+    private static List<ResolvedBinary> publishedBinaries(InstallerConfig c, PlatformTarget t, List<JsonNode> history, String version) {
+        JsonNode p = null;
+        for (JsonNode v : history) if (v.path("version").asText().equals(version)) p = v.path("platforms").path(t.key());
+        if (p == null || p.isMissingNode()) return null;
+        List<ResolvedBinary> bins = new ArrayList<>();
+        for (BinaryConfig b : t.configOf(c).binaries) {
+            String file = InstallerConfig.blank(b.file) ? Path.of(b.source).getFileName().toString() : b.file;
+            String name = InstallerConfig.blank(b.name) ? stem(file) : b.name;
+            JsonNode m = null;
+            for (JsonNode x : p.path("binaries")) if (x.path("name").asText().equals(name)) m = x;
+            if (m == null) return null;
+            bins.add(new ResolvedBinary(b, name, m.path("file").asText(), m.path("kind").asText(), m.path("version").asText(),
+                    m.path("url").asText(), m.path("sha256").asText(), m.path("size").asLong(), null, null, Map.of()));
+        }
+        return bins;
+    }
 
     static void writeAscii(Path path, String text) throws IOException { writeText(path, text, true); }
 

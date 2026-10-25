@@ -355,14 +355,9 @@ public final class LinuxTarget implements PlatformTarget {
         out.add(rec("id", c.id));
         out.add(rec("name", c.name));
         for (JsonNode was : manifest.path("replaces")) out.add(rec("replaces", was.asText()));
-        String latest = null, newest = null;
-        for (JsonNode v : manifest.path("versions")) {
-            if (v.path("platforms").path("linux").isMissingNode()) continue;
-            String ver = v.path("version").asText();
-            if (newest == null) newest = ver;
-            if (latest == null && !Versions.isPre(ver)) latest = ver;
-        }
-        out.add(rec("latest", latest != null ? latest : newest));
+        List<JsonNode> versions = new ArrayList<>();
+        manifest.path("versions").forEach(versions::add);
+        out.add(rec("latest", InstallerGenerator.latest(versions, key())));
         manifest.path("tools").fields().forEachRemaining(t -> {
             if (t.getKey().endsWith(".sh"))
                 out.add(rec("tool", t.getKey(), t.getValue().path("sha256").asText(), t.getValue().path("url").asText()));
