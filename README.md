@@ -180,75 +180,10 @@ built together, installable with one command while the public command keeps inst
 page then lists each member's version. `optional: true` leaves a member out unless asked for, for a demo or an
 application not ready yet: its box starts unticked, and a run without the window skips it, unless it is installed
 already (then it is kept up to date like the rest) or `INSTALL_ONLY` names it. The install page names the optional
-members, and the landing page tags their cards. A pinned member is never optional, so a preflight installs everything.
+members. A pinned member is never optional, so a preflight installs everything.
 `--install-everything` (or `INSTALL_EVERYTHING=1`) treats the optional members like the rest, and `--do-not-prompt-me`
 is `-Quiet`. Arguments need the script run from a file or as a script block, since `irm | iex` passes none:
-`& ([scriptblock]::Create((irm <url>))) --install-everything --do-not-prompt-me`. Both pages show that line.
-
-### A landing page
-
-A suite can also have a page of its own, served by GitHub Pages from a repo of its own (`owner.github.io`, say),
-so the command is short and the first thing people find:
-
-```json
-{
-  "site": {
-    "url": "https://owner.github.io",
-    "badge": "{version} · prerelease",
-    "tagline": "One line under the name.",
-    "requirements": "Needs Windows 10 or 11.",
-    "feedbackUrl": "https://github.com/owner/repo/issues/new",
-    "accentColor": "#2563eb",
-    "logo": "site/mark.svg",
-    "heroLogo": "site/mark-full.svg",
-    "heroAction": { "label": "What it is built on", "url": "https://owner.github.io/tech.html" },
-    "links": [ { "label": "Docs", "url": "https://owner.github.io/docs/" } ],
-    "footerLinks": [ { "label": "Licenses", "url": "https://owner.github.io/licenses.html" } ],
-    "notice": "Small print at the foot of the page, such as trademark notices.",
-    "linux": {
-      "url": "https://github.com/owner/repo/releases", "label": "Download for Linux",
-      "text": "what there is to download.", "requirements": "Needs X11 and a Vulkan driver.",
-      "steps": [ "Download the build.", "Run `chmod +x app`, then `./app`." ]
-    },
-    "sections": [
-      {
-        "id": "build", "title": "Build your own", "nav": "Developers",
-        "lede": "A paragraph under the title.",
-        "cards": [ { "stat": "1 line", "title": "Start", "text": "What it is.", "url": "https://owner.github.io/docs/start.html" } ],
-        "action": { "label": "Read the guide", "url": "https://owner.github.io/docs/" }
-      }
-    ]
-  },
-  "members": [
-    { "config": "../vexplore/installer.json", "page": "...", "image": "shots/vexplore.png", "imageAlt": "What it shows" }
-  ]
-}
-```
-
-```
-java -jar installer-core/target/installer-core-0.1.1-SNAPSHOT-cli.jar --suite suite.json --site --out ../owner.github.io
-```
-
-writes `index.html`, a copy of the suite's `install.ps1` (so the command is `irm https://owner.github.io/install.ps1 | iex`),
-each member's icon and screenshot under `img/` (and `site.logo` as `img/logo.svg` or `.png`, `site.heroLogo` as `img/hero-logo.svg` or `.png`), `versions.js` and `.nojekyll`. `versions.js` fills each element marked `data-version="windows"` or `"linux"` with the version that line installs now, read from the first member's published manifest for that platform, so the page stays right after a publish without being regenerated; `{version}` and `{linuxVersion}` in `site.badge` become such elements, and any other page can load the script too. Only
-`site.url` is required. The page is dark, with the name over a live backdrop that draws only while it is on screen;
-`site.heroLogo` is set large beside the name, to its right on a wide screen and above it on a narrow one. It shows the
-command with a copy button (and `site.heroAction` as a button under it), a card for each member (its screenshot, or its icon when it has no `image`; its
-`description`), and what the install changes on the computer, worked out from the members' configs: install
-folders, shortcuts, the commands added to `PATH` and the applications that register file types. Each of
-`site.sections` goes between the members and those details, as a title, a paragraph, a row of cards (a card's `url`
-is optional, and so is its `stat`, a figure set large above its title) and an optional button. The header links only the members and `site.links`, never a section. Text in the config
-may use `` `code` ``; everything else is escaped. `site.footerLinks` go in the footer after the source link, and
-`site.notice` is set in small print under them. When members have `linux` sections, a switch above the command,
-starting on the visitor's own system, chooses between the Windows line and the Linux one (`curl -fsSL <site.url>/install.sh | sh`,
-with `install.sh` written beside the page), and an *On Linux* detail says what it changes and how to choose and
-uninstall; `site.linux.requirements`, if set, goes under the Linux line. Without Linux members, `site.linux`
-offers Linux builds for download instead: the switch chooses between the install line and a button to
-`site.linux.url` with its `text` and `requirements`, and its `steps` become one more of the details (without
-script there is no switch, and both are shown). A `site.linux.url` beside Linux members is refused. The page
-needs at least one member with a `windows` section. The members' manifests stay where their own runs published them,
-so installs and updaters are the same whichever command installed them. Publish the folder from its repo's root with
-GitHub Pages (**Settings > Pages > Deploy from a branch**).
+`& ([scriptblock]::Create((irm <url>))) --install-everything --do-not-prompt-me`. The install page shows that line.
 
 ## What the generated files do
 
