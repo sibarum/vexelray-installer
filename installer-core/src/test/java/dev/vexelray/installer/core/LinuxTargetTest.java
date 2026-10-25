@@ -245,6 +245,82 @@ class LinuxTargetTest {
         assertThrows(InstallerException.class, () -> Main.targets("macos"));
     }
 
+    InstallerConfig both() throws IOException {
+        InstallerConfig c = config();
+        c.windows = new PlatformConfig();
+        BinaryConfig exe = new BinaryConfig();
+        Files.writeString(src.resolve("app.exe"), "exe");
+        exe.source = "src/app.exe";
+        exe.icon = "src/icon.png";
+        c.windows.binaries.add(exe);
+        return c;
+    }
+
+    void runOnly(InstallerConfig c, String version, String platform, String day) {
+        GenerationRequest r = new GenerationRequest();
+        r.config = c;
+        r.version = version;
+        r.outDir = out;
+        r.assetsDir = assets;
+        r.baseDir = tmp;
+        r.clock = Clock.fixed(Instant.parse(day + "T00:00:00Z"), ZoneOffset.UTC);
+        new InstallerGenerator(Main.targets(platform)).generate(r);
+    }
+
+    @Test
+    void eachPlatformPublishesIntoTheReleaseOnItsOwn() throws IOException {
+        InstallerConfig c = both();
+        run(c, "1.0.0");
+        JsonNode before = Json.tree(read("manifest.json"));
+
+        runOnly(c, "1.1.0", "windows", "2026-10-22");
+        JsonNode m = Json.tree(read("manifest.json"));
+        JsonNode v = m.path("versions").get(0);
+        assertEquals("1.1.0", v.path("version").asText());
+        assertFalse(v.path("platforms").has("linux"), "Linux has not published 1.1.0");
+        assertEquals("1.1.0", m.path("latest").asText(), "Windows installs the version it has");
+        assertTrue(read("manifest.linux.txt").contains("\nlatest\t1.0.0\n"), "Linux keeps installing the version it has");
+        assertEquals(before.path("tools").path("install.sh"), m.path("tools").path("install.sh"), "the Linux scripts are kept");
+        String readme = read("README.md");
+        assertTrue(readme.contains("## Install (Windows)") && readme.contains("## Install (Linux)"), readme);
+
+        runOnly(c, "1.1.0", "linux", "2026-10-23");
+        m = Json.tree(read("manifest.json"));
+        v = m.path("versions").get(0);
+        assertTrue(v.path("platforms").has("windows") && v.path("platforms").has("linux"), "the Windows build is kept");
+        assertTrue(v.path("installer").has("install.ps1") && v.path("installer").has("install.sh"));
+        assertEquals("2026-10-22T00:00:00Z", v.path("publishedAt").asText());
+        assertEquals("2026-10-23T00:00:00Z", v.path("updatedAt").asText());
+        assertEquals(List.of("1.1.0", "1.0.0"), m.path("versions").findValuesAsText("version").stream().distinct().toList());
+        assertTrue(read("manifest.linux.txt").contains("\nlatest\t1.1.0\n"));
+    }
+
+    @Test
+    void aLaterPlatformFirstLeavesTheWindowsLatestAlone() throws IOException {
+        InstallerConfig c = both();
+        run(c, "1.0.0");
+        runOnly(c, "1.1.0", "linux", "2026-10-22");
+        assertEquals("1.0.0", Json.tree(read("manifest.json")).path("latest").asText(),
+                "Windows updaters read latest, and 1.1.0 has no Windows build yet");
+        assertTrue(read("manifest.linux.txt").contains("\nlatest\t1.1.0\n"));
+    }
+
+    @Test
+    void aFileBothPlatformsShipMustBeTheSameUpload() throws IOException {
+        InstallerConfig c = both();
+        Files.writeString(src.resolve("NOTICES.txt"), "notices as Windows built them");
+        BinaryConfig notices = new BinaryConfig();
+        notices.source = "src/NOTICES.txt";
+        c.windows.binaries.add(notices);
+        c.linux.binaries.add(notices);
+        runOnly(c, "1.1.0", "windows", "2026-10-22");
+        runOnly(c, "1.1.0", "linux", "2026-10-23");   // the same bytes: one upload serves both
+
+        Files.writeString(src.resolve("NOTICES.txt"), "notices as Linux built them");
+        String why = assertThrows(InstallerException.class, () -> runOnly(c, "1.1.0", "linux", "2026-10-24")).getMessage();
+        assertTrue(why.contains("NOTICES.txt") && why.contains("another platform"), why);
+    }
+
     @Test
     void refusesWhatLinuxCannotInstall() throws IOException {
         Files.writeString(src.resolve("rt.zip"), "zip");

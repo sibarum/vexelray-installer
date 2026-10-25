@@ -12,8 +12,9 @@ import java.util.List;
  * <pre>
  * java -jar installer-core-*-cli.jar --config installer.json [--version 1.2.0] [--out dist]
  *      [--assets build/release-assets] [--notes "..."] [--base-url URL] [--asset-base-url URL]
- *      [--platform linux] (only these platforms' sections, comma-separated; the others' artifacts are not needed)
- *      [--publish]        (token from $GITHUB_TOKEN)
+ *      [--platform linux] (only these platforms' sections, comma-separated; the others' artifacts are not needed,
+ *                          and what the manifest already has for them at this version is kept)
+ *      [--publish]        (token from $GITHUB_TOKEN; with --platform, adds that platform's files to the release)
  *
  * java -jar installer-core-*-cli.jar --suite suite.json [--out dist] [--base-url URL]
  * java -jar installer-core-*-cli.jar --suite suite.json --site [--out site]   (the landing page, at the suite's site.url)
@@ -53,9 +54,7 @@ public final class Main {
             }
         }
         if (site && suite == null) throw new InstallerException("--site needs --suite");
-        if (platforms != null && (suite != null || publish)) {
-            throw new InstallerException("--platform is for generating one application, and a release has every platform");
-        }
+        if (platforms != null && suite != null) throw new InstallerException("--platform is for generating one application");
         if (site && baseUrl != null) throw new InstallerException("--site takes its address from the suite's site.url, not --base-url");
         if (suite != null) return suite(Path.of(suite).toAbsolutePath(), Path.of(out).toAbsolutePath(), baseUrl, site);
         Path configPath = Path.of(config).toAbsolutePath();
