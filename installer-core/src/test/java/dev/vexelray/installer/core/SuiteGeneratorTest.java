@@ -573,6 +573,30 @@ class SuiteGeneratorTest {
     }
 
     @Test
+    void thePageReadsTheVersionsFromTheManifestsTheLinesInstallFrom() throws IOException {
+        site(siteSuite());
+        assertFalse(Files.readString(out.resolve("versions.js"), StandardCharsets.UTF_8).contains("\"linux\":\""),
+                "without Linux members there is no Linux version to read");
+
+        explorerOnLinux();
+        SuiteConfig s = siteSuite();
+        s.site.badge = "{version} & {linuxVersion} prerelease";
+        site(s);
+
+        String js = Files.readString(out.resolve("versions.js"), StandardCharsets.UTF_8);
+        assertTrue(js.contains("{\"windows\":\"https://raw.githubusercontent.com/owner/editor/main/manifest.json\","
+                + "\"linux\":\"https://raw.githubusercontent.com/owner/explorer/dev/dist/manifest.linux.txt\"}"), js);
+        assertTrue(js.contains("<script src=\"https://owner.github.io/versions.js\" defer></script>"));
+        assertFalse(js.contains("{{"));
+        String page = Files.readString(out.resolve("index.html"), StandardCharsets.UTF_8);
+        assertTrue(page.contains("<script src=\"versions.js\" defer></script>"));
+        assertTrue(page.contains("<span class=\"badge\"><span data-version=\"windows\">latest</span> &amp; "
+                + "<span data-version=\"linux\">latest</span> prerelease</span>"));
+        assertTrue(page.contains("It installs the <span data-version=\"linux\">latest</span> builds of Explorer;"
+                + " the others are not on Linux yet."));
+    }
+
+    @Test
     void aLinuxDownloadIsRefusedWhenMembersInstallOnLinux() throws IOException {
         explorerOnLinux();
         SuiteConfig s = siteSuite();
