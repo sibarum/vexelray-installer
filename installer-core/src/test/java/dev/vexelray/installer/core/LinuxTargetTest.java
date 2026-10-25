@@ -296,6 +296,22 @@ class LinuxTargetTest {
     }
 
     @Test
+    void aPlatformBehindKeepsItsReadmeSectionAfterTheConfigGrew() throws IOException {
+        InstallerConfig c = both();
+        run(c, "1.0.0");
+        Files.writeString(src.resolve("extra.tar.gz"), "");
+        tarGz(src.resolve("extra.tar.gz"), Map.of("x", "x"));
+        BinaryConfig extra = new BinaryConfig();
+        extra.source = "src/extra.tar.gz";
+        extra.dir = "extra";
+        c.linux.binaries.add(extra);   // named by the config now, but not in Linux's 1.0.0
+        runOnly(c, "1.1.0", "windows", "2026-10-22");
+        String readme = read("README.md");
+        assertTrue(readme.contains("## Install (Linux)"), "Linux's section, of the 1.0.0 it has: " + readme);
+        assertFalse(readme.contains("~/.local/opt/myapp/extra/"), "and of what 1.0.0 shipped, not the config's newer set");
+    }
+
+    @Test
     void aLaterPlatformFirstLeavesTheWindowsLatestAlone() throws IOException {
         InstallerConfig c = both();
         run(c, "1.0.0");

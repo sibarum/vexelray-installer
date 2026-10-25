@@ -371,22 +371,26 @@ public final class InstallerGenerator {
     }
 
     /**
-     * A kept platform's binaries as the manifest has them at {@code version}, matched to the config by name, for its
-     * README section. Null when that version has no build for it, or the config no longer names the same binaries.
+     * A kept platform's binaries as the manifest has them at {@code version}, for its README section: what was
+     * published, which may be an older set than the config names now (a platform that has not published for a while).
+     * Each takes its settings from the config's binary of the same name, when there still is one. Null when that
+     * version has no build for the platform.
      */
     private static List<ResolvedBinary> publishedBinaries(InstallerConfig c, PlatformTarget t, List<JsonNode> history, String version) {
         JsonNode p = null;
         for (JsonNode v : history) if (v.path("version").asText().equals(version)) p = v.path("platforms").path(t.key());
         if (p == null || p.isMissingNode()) return null;
-        List<ResolvedBinary> bins = new ArrayList<>();
+        Map<String, BinaryConfig> byName = new LinkedHashMap<>();
         for (BinaryConfig b : t.configOf(c).binaries) {
             String file = InstallerConfig.blank(b.file) ? Path.of(b.source).getFileName().toString() : b.file;
-            String name = InstallerConfig.blank(b.name) ? stem(file) : b.name;
-            JsonNode m = null;
-            for (JsonNode x : p.path("binaries")) if (x.path("name").asText().equals(name)) m = x;
-            if (m == null) return null;
-            bins.add(new ResolvedBinary(b, name, m.path("file").asText(), m.path("kind").asText(), m.path("version").asText(),
-                    m.path("url").asText(), m.path("sha256").asText(), m.path("size").asLong(), null, null, Map.of()));
+            byName.put(InstallerConfig.blank(b.name) ? stem(file) : b.name, b);
+        }
+        List<ResolvedBinary> bins = new ArrayList<>();
+        for (JsonNode m : p.path("binaries")) {
+            String name = m.path("name").asText();
+            bins.add(new ResolvedBinary(byName.getOrDefault(name, new BinaryConfig()), name, m.path("file").asText(),
+                    m.path("kind").asText(), m.path("version").asText(), m.path("url").asText(), m.path("sha256").asText(),
+                    m.path("size").asLong(), null, null, Map.of()));
         }
         return bins;
     }
