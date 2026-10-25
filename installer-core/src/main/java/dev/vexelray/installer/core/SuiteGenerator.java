@@ -171,6 +171,7 @@ public final class SuiteGenerator {
         String command = "irm " + installUrl + " | iex";
         writeScript(s, win, outDir, installUrl);
         if (!lin.isEmpty()) writeShScript(s, members, outDir, shUrl);
+        writeVersions(site.url.replaceAll("/+$", ""), win, lin, outDir);
 
         Path img = outDir.resolve("img");
         Files.createDirectories(img);
@@ -214,7 +215,7 @@ public final class SuiteGenerator {
         vars.put("HERO_ACTION", heroAction);
         vars.put("ACCENT", InstallerConfig.blank(site.accentColor) ? "#2563eb" : cssColor(site.accentColor));
         vars.put("NAV", nav(site, s.repo));
-        vars.put("BADGE", InstallerConfig.blank(site.badge) ? "" : "<span class=\"badge\">" + html(site.badge) + "</span>");
+        vars.put("BADGE", InstallerConfig.blank(site.badge) ? "" : "<span class=\"badge\">" + versionTokens(html(site.badge)) + "</span>");
         vars.put("TAGLINE", prose(InstallerConfig.blank(site.tagline) ? description : site.tagline));
         vars.put("INSTALL_COMMAND", html(command));
         vars.put("INSTALL_URL", attr(installUrl));
@@ -235,13 +236,37 @@ public final class SuiteGenerator {
         vars.put("PLATFORM_TABS", site.linux == null && lin.isEmpty() ? "" :"        <div class=\"platforms\" id=\"platforms\" role=\"tablist\" aria-label=\"Your system\" hidden>"
                 + "<button type=\"button\" role=\"tab\" data-platform=\"windows\" aria-controls=\"get-windows\">Windows</button>"
                 + "<button type=\"button\" role=\"tab\" data-platform=\"linux\" aria-controls=\"get-linux\">Linux</button></div>");
-        vars.put("LINUX_HERO", lin.isEmpty() ? linuxHero(site.linux) : linuxInstallHero(shUrl, site.linux));
+        vars.put("LINUX_HERO", lin.isEmpty() ? linuxHero(site.linux) : linuxInstallHero(shUrl, site.linux, members, lin));
         vars.put("LINUX_DETAILS", lin.isEmpty() ? linuxDetails(site.linux) : linuxInstallDetails(shUrl, members, lin));
         vars.put("FOOTER", footer);
         InstallerGenerator.writeUtf8(outDir.resolve("index.html"), Templates.render("suite/index.html", vars));
         // Served as is: no Jekyll, which would otherwise skip files and folders it has opinions about.
         InstallerGenerator.writeUtf8(outDir.resolve(".nojekyll"), "");
         return command;
+    }
+
+    /** Where {@code versions.js} writes each platform's version once it has read it; until then, "latest". */
+    private static final String VERSION_WINDOWS = "<span data-version=\"windows\">latest</span>";
+    private static final String VERSION_LINUX = "<span data-version=\"linux\">latest</span>";
+
+    /** {@code {version}} and {@code {linuxVersion}} in page text, as the versions the install lines install now. */
+    private static String versionTokens(String html) {
+        return html.replace("{version}", VERSION_WINDOWS).replace("{linuxVersion}", VERSION_LINUX);
+    }
+
+    /**
+     * The site's {@code versions.js}, which the page loads and any other page may: it reads the first member's
+     * published manifest for each platform, the same one that platform's install line reads, so a page that says
+     * which version the line installs is right after every publish without being regenerated.
+     */
+    private static void writeVersions(String siteUrl, List<Resolved> win, List<Resolved> lin, Path outDir) throws IOException {
+        ObjectNode manifests = Json.object();
+        manifests.put("windows", win.get(0).manifestUrl);
+        if (!lin.isEmpty()) manifests.put("linux", LinuxTarget.manifestUrl(lin.get(0).manifestUrl));
+        Files.createDirectories(outDir);
+        InstallerGenerator.writeUtf8(outDir.resolve("versions.js"), Templates.render("suite/versions.js", Map.of(
+                "SITE_URL", siteUrl,
+                "MANIFESTS", Json.compact(manifests).replace("</", "<\\/"))));
     }
 
     private List<Resolved> resolve(SuiteConfig s, Path baseDir) throws IOException {
@@ -510,13 +535,16 @@ public final class SuiteGenerator {
     }
 
     /** The hero's Linux panel when the members have a Linux installer: the line to paste into a terminal. */
-    private static String linuxInstallHero(String shUrl, SuiteConfig.Download d) {
+    private static String linuxInstallHero(String shUrl, SuiteConfig.Download d, List<Resolved> members, List<Resolved> lin) {
+        boolean windowsOnly = members.stream().anyMatch(r -> !r.linux());
+        String which = !windowsOnly ? "" : " It installs the " + VERSION_LINUX + " builds of "
+                + and(lin.stream().map(r -> html(r.config.name)).toList()) + "; the others are not on Linux yet.";
         StringBuilder b = new StringBuilder("        <div class=\"platform\" id=\"get-linux\">\n")
                 .append("        <p class=\"install-label\"><strong>Linux:</strong> paste this into a terminal and press <kbd>Enter</kbd></p>\n")
                 .append("        <div class=\"cmd\"><code id=\"install-command-linux\">").append(html("curl -fsSL " + shUrl + " | sh"))
                 .append("</code><button class=\"copy\" type=\"button\" data-copy=\"install-command-linux\">Copy</button></div>\n")
                 .append("        <p class=\"hint\">No <code>sudo</code>: everything goes under <code>~/.local</code>, for your user."
-                        + " Running the same line again updates everything.</p>\n")
+                        + " Running the same line again updates everything.").append(which).append("</p>\n")
                 .append("        <ul class=\"facts\">\n          <li>No root</li>\n          <li>Your user only</li>\n"
                         + "          <li>Every download checked by SHA-256</li>\n          <li>Uninstall with one command</li>\n        </ul>\n");
         if (d != null && !InstallerConfig.blank(d.requirements)) b.append("        <p class=\"hint\">").append(prose(d.requirements)).append("</p>\n");

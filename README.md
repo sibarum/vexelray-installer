@@ -194,7 +194,7 @@ so the command is short and the first thing people find:
 {
   "site": {
     "url": "https://owner.github.io",
-    "badge": "0.1.0 · prerelease",
+    "badge": "{version} · prerelease",
     "tagline": "One line under the name.",
     "requirements": "Needs Windows 10 or 11.",
     "feedbackUrl": "https://github.com/owner/repo/issues/new",
@@ -230,7 +230,7 @@ java -jar installer-core/target/installer-core-0.1.1-SNAPSHOT-cli.jar --suite su
 ```
 
 writes `index.html`, a copy of the suite's `install.ps1` (so the command is `irm https://owner.github.io/install.ps1 | iex`),
-each member's icon and screenshot under `img/` (and `site.logo` as `img/logo.svg` or `.png`, `site.heroLogo` as `img/hero-logo.svg` or `.png`), and `.nojekyll`. Only
+each member's icon and screenshot under `img/` (and `site.logo` as `img/logo.svg` or `.png`, `site.heroLogo` as `img/hero-logo.svg` or `.png`), `versions.js` and `.nojekyll`. `versions.js` fills each element marked `data-version="windows"` or `"linux"` with the version that line installs now, read from the first member's published manifest for that platform, so the page stays right after a publish without being regenerated; `{version}` and `{linuxVersion}` in `site.badge` become such elements, and any other page can load the script too. Only
 `site.url` is required. The page is dark, with the name over a live backdrop that draws only while it is on screen;
 `site.heroLogo` is set large beside the name, to its right on a wide screen and above it on a narrow one. It shows the
 command with a copy button (and `site.heroAction` as a button under it), a card for each member (its screenshot, or its icon when it has no `image`; its
