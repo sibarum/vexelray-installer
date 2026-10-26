@@ -1,8 +1,8 @@
 #requires -Version 5.1
 # End-to-end test against a local web server: build 1.0.0, install it through `irm | iex`,
 # build 1.1.0, update, uninstall. Touches only a temp dir, a temp registry dir, the current
-# user's Desktop/Start menu (shortcuts are removed again) and HKCU (Uninstall key, PATH and
-# .vismoke* file types, all restored). Run:  powershell -File tests\smoke.ps1
+# user's Desktop/Start menu (shortcuts are removed again) and HKCU (Uninstall key, PATH,
+# .vismoke* file types and the shell's cached names for the test exes, all restored). Run:  powershell -File tests\smoke.ps1
 $ErrorActionPreference = 'Continue'
 $repo = Split-Path $PSScriptRoot -Parent
 $root = Join-Path ([IO.Path]::GetTempPath()) ("vi-smoke-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -23,7 +23,8 @@ function ClassValue([string]$sub, [string]$name = '') {
 function Check([bool]$ok, [string]$what) {
     if ($ok) { Write-Host "  ok   $what" -ForegroundColor Green } else { Write-Host "  FAIL $what" -ForegroundColor Red; $script:fails++ }
 }
-$cli = Get-ChildItem "$repo\installer-core\target\installer-core-*-cli.jar" -ErrorAction SilentlyContinue | Select-Object -First 1
+# the newest build: an older version's jar can still be beside it, and sorts first by name
+$cli = Get-ChildItem "$repo\installer-core\target\installer-core-*-cli.jar" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if (-not $cli) {
     Write-Host "building the generator (mvn package)"
     & mvn -q -f "$repo\pom.xml" -pl installer-core -DskipTests package
@@ -124,6 +125,7 @@ try {
     Check (Test-Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\vi-smoke") 'Apps & features entry'
     Check (([Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment').GetValue('Path', '', 'DoNotExpandEnvironmentNames')) -like "*$installDir*") 'PATH entry added'
     Check ((ClassValue 'vi-smoke.vismoke\shell\open\command') -eq "`"$installDir\app.exe`" `"%1`"") 'ProgID open command runs the exe with the file'
+    Check ((ClassValue 'vi-smoke.vismoke\shell\open' 'FriendlyAppName') -eq 'ViSmoke') 'Open with names the program by the app name'
     Check ((ClassValue 'vi-smoke.vismoke\DefaultIcon') -eq "$installDir\app.exe,0") 'ProgID uses the exe icon'
     Check ((ClassValue 'vi-smoke.vismoketaken\DefaultIcon') -eq "$installDir\app-doc.ico,0" -and (Test-Path "$installDir\app-doc.ico")) 'a file type with an icon of its own uses it'
     Check ((ClassValue '.vismoke') -eq 'vi-smoke.vismoke' -and (ClassValue '.vismoke' 'Content Type') -eq 'text/x-vismoke') 'unclaimed extension becomes ours, with its content type'
@@ -138,6 +140,9 @@ try {
     Check ($out -match 'already installed') 'second install detects existing version'
 
     Write-Host "build 1.1.0, update"
+    # the name the shell cached for the old app.exe, as Open with leaves it
+    $mui = 'Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache'
+    $mk = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($mui); $mk.SetValue("$installDir\app.exe.FriendlyAppName", 'app'); $mk.Close()
     Copy-Item -Force "$env:windir\System32\where.exe" "$root\src\app.exe"
     [IO.File]::AppendAllText("$root\src\app.exe", "x")
     SmokeConfig $false
@@ -151,6 +156,9 @@ try {
     $rec = Get-Content -Raw "$regDir\vi-smoke.json" | ConvertFrom-Json
     Check ($rec.version -eq '1.1.0') 'record now at 1.1.0'
     Check ((Get-Item "$installDir\app.exe").Length -eq ((Get-Item "$env:windir\System32\where.exe").Length + 1)) 'app.exe replaced'
+    $mk = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($mui)
+    Check ($null -eq $mk.GetValue("$installDir\app.exe.FriendlyAppName")) "the shell's cached name for the old app.exe is cleared"
+    $mk.Close()
     Check (-not (ClassKey 'vi-smoke.vismokej') -and -not (ClassKey '.vismokej')) 'an association dropped by the update is unregistered'
     Check ((ClassValue '.vismoke') -eq 'vi-smoke.vismoke') 'kept association is still the default after the update'
     Check ((ClassValue 'vi-smoke.vismoketaken\DefaultIcon') -eq "$installDir\app.exe,0" -and -not (Test-Path "$installDir\app-doc.ico")) 'a file-type icon dropped by the update is removed'
@@ -466,6 +474,10 @@ try {
         Remove-Item -Recurse -Force -LiteralPath "HKCU:\Software\Classes\$k" -ErrorAction SilentlyContinue
     }
     Remove-Item -Force -LiteralPath (Join-Path ([Environment]::GetFolderPath('Programs')) 'Test apps.lnk') -ErrorAction SilentlyContinue
+    $mk = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache', $true)
+    if ($mk) {
+        try { @($mk.GetValueNames() | Where-Object { $_.StartsWith($root, [StringComparison]::OrdinalIgnoreCase) }) | ForEach-Object { $mk.DeleteValue($_, $false) } } finally { $mk.Close() }
+    }
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
 }
 if ($fails -gt 0) { Write-Host "$fails check(s) failed" -ForegroundColor Red; exit 1 }

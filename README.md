@@ -249,7 +249,10 @@ is `-Quiet`. Arguments need the script run from a file or as a script block, sin
 - **File associations** are per user (`HKCU\Software\Classes`, no admin rights). Each extension
   gets a ProgID `<id>.<ext>` whose open command passes the file as the last argument: `"app.exe"
   "%1"`, and for a jar `javaw` (or the `.cmd` launcher when `shortcuts.gui` is false). The binary
-  is always listed under **Open with**. It becomes the default only when no other program has
+  is always listed under **Open with**, named by the app's `name` (the ProgID's `FriendlyAppName`;
+  without it Windows shows the exe's file name when the exe has no version resource). Each install
+  and update also clears the name the shell cached for its native exes, so a renamed app is not
+  shown under its old name. It becomes the default only when no other program has
   claimed the extension, because Windows does not let a program silently take over an existing
   file type. Executable types (`.exe`, `.bat`, `.ps1`, ...) are refused at generation time.
   A file type shows the binary's `icon` (or a native exe's own) unless its association names an
