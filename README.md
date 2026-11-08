@@ -150,12 +150,14 @@ listed order, it fetches the member's published `manifest.json`, downloads the m
 refuses it unless it matches the SHA-256 the manifest records (`tools.install.ps1`), and runs it. A member
 whose manifest is not published yet is skipped and reported. `INSTALL_ONLY=a,b` limits the run to some
 members. `INSTALL_NO_SHORTCUTS`, `INSTALL_NO_PATH`, `INSTALL_NO_ASSOCIATIONS`, `INSTALL_FORCE` and `INSTALL_SKIP_CHECKS` pass through to
-every member; `INSTALL_VERSION` and `INSTALL_DIR` name one application, so they are set aside.
+every member. `INSTALL_VERSION=X` (or `--version X`) installs release X of every member instead of its `latest`,
+skipping a member whose manifest does not list X; the releases are cut together, so one version names the
+same release of every member. `INSTALL_DIR` names one application, so it is set aside.
 
 When any member has a `linux` section, the suite also gets an `install.sh` (`curl -fsSL <url> | sh`) and the page
 a Linux part: the same plan, run through each member's own `install.sh` against its `manifest.linux.txt`, with the
 same `INSTALL_*` variables (set for the `sh`: `curl -fsSL <url> | INSTALL_ONLY=a,b sh`) and
-`sh -s -- --install-everything`. It has no window. A member with only a `windows` section is left out of it and
+`sh -s -- --install-everything --version X`. It has no window. A member with only a `windows` section is left out of it and
 said to have no Linux version, and one with only a `linux` section out of `install.ps1`.
 
 Run from a console a person is at, the suite installer opens one window, under the same rules as an
@@ -174,7 +176,7 @@ files finishes, and the rest are not started). Unmet system requirements are ref
 as in any quiet install; `INSTALL_SKIP_CHECKS=1` installs anyway. `page`
 (optional) links a member's name on the install page; `manifestUrl` (optional) overrides the URL derived from
 the member's `repo`, `branch` and `repoPath`. `version` (optional) pins the member: the suite installs that
-version instead of the manifest's `latest`, and reinstalls it even when it is the one installed, since a snapshot is
+version instead of the manifest's `latest` (or `INSTALL_VERSION`), and reinstalls it even when it is the one installed, since a snapshot is
 rebuilt under the same version. A suite whose members are all pinned to snapshots is a preflight: every snapshot
 built together, installable with one command while the public command keeps installing the releases. The install
 page then lists each member's version. `optional: true` leaves a member out unless asked for, for a demo or an

@@ -55,8 +55,19 @@ These are passed on to every application's installer:
 
 With the window, the first three set how its boxes start.
 
-A particular version or folder applies to one application, so this script ignores `INSTALL_VERSION` and
-`INSTALL_DIR`. To use them, run that application's own installer.
+### A particular release
+
+```powershell
+$env:INSTALL_VERSION = '0.1.2'; irm {{INSTALL_URL}} | iex
+& ([scriptblock]::Create((irm {{INSTALL_URL}}))) --version 0.1.2
+```
+
+`INSTALL_VERSION` (or `--version`) installs that release of every application instead of the latest. An
+application that does not have that release is skipped and reported. Running the line again without it goes
+back to the latest.
+
+A folder applies to one application, so this script ignores `INSTALL_DIR`. To use it, run that application's
+own installer.
 
 ### Update
 

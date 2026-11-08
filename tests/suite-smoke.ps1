@@ -1,7 +1,7 @@
 #requires -Version 5.1
 # End-to-end test of a suite installer against a local web server: three members, one published twice
-# over, one never published. Installs through `irm | iex` and from a file, checks INSTALL_ONLY, an optional member, that
-# INSTALL_DIR is not passed on, that a tampered member installer is refused, then uninstalls. Touches only
+# over, one never published. Installs through `irm | iex` and from a file, checks INSTALL_ONLY, an optional member, a
+# release named with --version or INSTALL_VERSION, that INSTALL_DIR is not passed on, that a tampered member installer is refused, then uninstalls. Touches only
 # a temp dir, a temp registry dir, and HKCU's Uninstall keys and PATH (both restored). Run:
 #   powershell -File tests\suite-smoke.ps1
 $ErrorActionPreference = 'Continue'
@@ -15,7 +15,8 @@ $fails = 0
 function Check([bool]$ok, [string]$what) {
     if ($ok) { Write-Host "  ok   $what" -ForegroundColor Green } else { Write-Host "  FAIL $what" -ForegroundColor Red; $script:fails++ }
 }
-$cli = Get-ChildItem "$repo\installer-core\target\installer-core-*-cli.jar" -ErrorAction SilentlyContinue | Select-Object -First 1
+# the newest, as deploy.ps1 takes it: target keeps the jars of earlier versions
+$cli = Get-ChildItem "$repo\installer-core\target\installer-core-*-cli.jar" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if (-not $cli) {
     Write-Host "building the generator (mvn package)"
     & mvn -q -f "$repo\pom.xml" -pl installer-core -DskipTests package
@@ -108,6 +109,17 @@ try {
           '--base-url', "$base/site-vi-sa", '--asset-base-url', "$base/assets-vi-sa")
     $o = Run "irm $base/optional/install.ps1 | iex"
     Check ((Rec 'vi-sa').version -eq '1.1.0') 'vi-sa updated to 1.1.0, by the suite where it is optional'
+
+    Write-Host "a release named on the line is installed instead of the latest"
+    $o = Run "`$env:INSTALL_ONLY = 'vi-sa,vi-sb'; & ([scriptblock]::Create((irm $base/suite/install.ps1))) --version v1.0.0; 'LEFT=[' + `$env:INSTALL_VERSION + ']'"
+    Check ((Rec 'vi-sa').version -eq '1.0.0' -and $o -notmatch 'Ignoring unknown argument') '--version v1.0.0 takes vi-sa back to 1.0.0'
+    Check ($o -match 'already installed' -and (Rec 'vi-sb').version -eq '1.0.0') 'vi-sb, already at 1.0.0, is left as it was'
+    Check ($o -match 'LEFT=\[\]') 'and INSTALL_VERSION is not left set'
+    $o = Run "`$env:INSTALL_ONLY = 'vi-sa,vi-sb'; `$env:INSTALL_VERSION = '9.9.9'; irm $base/suite/install.ps1 | iex; 'LEFT=[' + `$env:INSTALL_VERSION + ']'"
+    Check ($o -match 'VI-SA 9\.9\.9 has not been published yet' -and (Rec 'vi-sa').version -eq '1.0.0') 'INSTALL_VERSION of a release never published skips each member and says so'
+    Check ($o -match 'LEFT=\[9\.9\.9\]') 'and leaves the caller its INSTALL_VERSION'
+    $o = Run "irm $base/optional/install.ps1 | iex"
+    Check ((Rec 'vi-sa').version -eq '1.1.0') 'the line without it goes back to the latest'
 
     Write-Host "a preflight suite installs the versions it pins, even over themselves"
     [IO.File]::AppendAllText("$root\src\app.exe", "y")
